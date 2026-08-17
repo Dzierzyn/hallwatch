@@ -78,6 +78,13 @@ make wake                                       # albo z terminala
 
 Sesja kończy się po `session_idle_s` ciszy lub po `session_seconds` twardego
 limitu. `active_hours` (np. `"07:00-23:00"`) pozwala ignorować sygnały nocą.
+
+**Podgląd live nie znika w tym trybie** — jest dostępny w każdej sesji, a przycisk
+„Podgląd na żądanie" w dashboardzie budzi kamerę i trzyma sesję otwartą, dopóki
+patrzysz, nawet gdy w kadrze nic się nie rusza. Przeglądarka wysyła puls
+`POST /api/watch` co 10 s; ukrycie karty przestaje go wysyłać, więc kamera
+zasypia sama. `watch_max_s` jest bezpiecznikiem na zapomnianą zakładkę —
+inaczej jedno otwarte okno rozładowałoby akumulator.
 Model tła MOG2 jest budowany od nowa na każdą sesję ze skróconym warmupem — po
 przerwie stary model jest bezużyteczny, a o zdarzeniu i tak wiemy z sygnału.
 
