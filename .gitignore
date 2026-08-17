@@ -1,0 +1,28 @@
+# dane i nagrania - nigdy do repo
+data/
+*.db
+*.db-wal
+*.db-shm
+*.mp4
+*.jpg
+zones.generated.yaml
+
+# wagi modeli (sciagaja sie same)
+*.pt
+*.onnx
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# sekrety
+.env
+
+# macOS
+.DS_Store

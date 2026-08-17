@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HallWatch</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel-2:#1c2230; --line:#262d3a;
+    --text:#e6edf3; --muted:#8b98a8; --accent:#4cc38a; --warn:#e3b341; --danger:#f85149;
+    --blue:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
+         border-bottom:1px solid var(--line);background:var(--panel);
+         position:sticky;top:0;z-index:10;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;letter-spacing:.3px}
+  h1 span{color:var(--muted);font-weight:400}
+  .pills{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--panel-2);
+        border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pill.on{color:var(--accent);border-color:#22503c}
+  .pill.rec{color:var(--danger);border-color:#5c2320;animation:blink 1.4s infinite}
+  .pill.warn{color:var(--warn);border-color:#5a4a1c}
+  @keyframes blink{50%{opacity:.45}}
+  main{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);
+       gap:16px;padding:16px;max-width:1600px;margin:0 auto}
+  @media(max-width:980px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+           margin:0;padding:12px 14px;border-bottom:1px solid var(--line)}
+  #live{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:contain}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:1px;background:var(--line)}
+  .stat{background:var(--panel);padding:12px 14px}
+  .stat b{display:block;font-size:22px;font-variant-numeric:tabular-nums;font-weight:600}
+  .stat small{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  canvas{width:100%;height:90px;display:block;padding:10px}
+  .events{max-height:60vh;overflow:auto}
+  .ev{display:flex;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);
+      cursor:pointer;transition:background .12s}
+  .ev:hover{background:var(--panel-2)}
+  .ev img{width:76px;height:48px;object-fit:cover;border-radius:5px;background:#000;flex:none}
+  .ev .no-thumb{width:76px;height:48px;border-radius:5px;background:var(--panel-2);flex:none;
+                display:grid;place-items:center;color:var(--muted);font-size:18px}
+  .ev-meta{min-width:0;flex:1}
+  .ev-time{font-variant-numeric:tabular-nums;font-size:13px}
+  .ev-sub{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-size:10px;padding:2px 6px;border-radius:4px;background:var(--panel-2);
+       border:1px solid var(--line);margin-right:5px;text-transform:uppercase;letter-spacing:.04em}
+  .tag.person{color:var(--accent)} .tag.motion{color:var(--muted)} .tag.audio{color:var(--blue)}
+  .meter{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin:10px 14px 14px}
+  .meter i{display:block;height:100%;background:var(--blue);transition:width .15s}
+  .row{display:flex;justify-content:space-between;padding:7px 14px;font-size:13px;
+       border-bottom:1px solid var(--line)}
+  .row span{color:var(--muted)}
+  dialog{border:1px solid var(--line);background:var(--panel);color:var(--text);
+         border-radius:10px;padding:0;max-width:min(92vw,900px)}
+  dialog::backdrop{background:rgba(0,0,0,.72)}
+  dialog video{width:100%;display:block;background:#000}
+  dialog .bar{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
+              border-top:1px solid var(--line);font-size:13px}
+  button{background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+         border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--muted)}
+  .empty{padding:26px 14px;color:var(--muted);text-align:center;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>HallWatch <span id="cam">—</span></h1>
+  <div class="pills" id="pills"></div>
+</header>
+
+<main>
+  <div>
+    <div class="card">
+      <h2>Podgląd live</h2>
+      <img id="live" src="/stream.mjpg" alt="podgląd na żywo">
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Licznik</h2>
+      <div class="grid" id="stats"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Aktywność (ostatnie 3 h)</h2>
+      <canvas id="chart" width="900" height="90"></canvas>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>System</h2>
+      <div id="sys"></div>
+      <div class="meter" title="poziom dźwięku"><i id="audioBar" style="width:0"></i></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Zdarzenia</h2>
+      <div class="events" id="events"><div class="empty">Czekam na pierwsze zdarzenie…</div></div>
+    </div>
+  </div>
+</main>
+
+<dialog id="player">
+  <video id="video" controls preload="metadata"></video>
+  <div class="bar"><span id="playerInfo"></span><button onclick="player.close()">Zamknij</button></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmtTime = ts => new Date(ts*1000).toLocaleString('pl-PL',{hour12:false});
+const fmtDur = s => s == null ? '—' : (s < 60 ? s.toFixed(0)+' s' : Math.floor(s/60)+' min '+Math.round(s%60)+' s');
+const KIND_PL = {person:'osoba', motion:'ruch', audio:'dźwięk'};
+
+function pill(text, cls=''){ return `<div class="pill ${cls}">${text}</div>`; }
+
+async function tickState(){
+  try{
+    const s = await (await fetch('/api/state')).json();
+    $('cam').textContent = '· ' + s.camera_name;
+
+    let p = '';
+    p += pill(`${s.fps.toFixed(1)} FPS`, s.fps > 1 ? 'on' : 'warn');
+    p += pill(s.awake ? 'YOLO aktywny' : 'czuwanie', s.awake ? 'on' : '');
+    if (s.recording) p += pill('● REC', 'rec');
+    if (s.motion) p += pill('ruch', 'warn');
+    if (s.audio_enabled) p += pill(`audio ${s.audio_dbfs.toFixed(0)} dBFS`, s.audio_loud ? 'rec' : '');
+    if (s.privacy_masks) p += pill(`${s.privacy_masks} maski prywatności`, 'on');
+    if (s.last_error) p += pill('błąd: ' + s.last_error, 'rec');
+    $('pills').innerHTML = p;
+
+    const zones = Object.entries(s.zones || {});
+    $('stats').innerHTML = [
+      ['osób teraz', s.persons],
+      [s.count_in != null ? 'wejścia' : 'in', s.count_in],
+      ['wyjścia', s.count_out],
+      ['unikalnych osób', s.unique_seen],
+      ...zones.map(([n,v]) => [n.replace(/-/g,' '), v]),
+    ].map(([k,v]) => `<div class="stat"><b>${v}</b><small>${k}</small></div>`).join('');
+
+    const h = Math.floor(s.uptime_s/3600), m = Math.floor(s.uptime_s%3600/60);
+    $('sys').innerHTML = [
+      ['źródło', s.source.length > 34 ? s.source.slice(0,34)+'…' : s.source],
+      ['urządzenie', s.device],
+      ['czas detekcji', s.detect_ms.toFixed(1)+' ms'],
+      ['klatek łącznie', s.frames_total.toLocaleString('pl-PL')],
+      ['reconnecty', s.reconnects],
+      ['chmura', s.cloud_status],
+      ['retencja', s.retention_days + ' dni'],
+      ['uptime', `${h} h ${m} min`],
+    ].map(([k,v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
+
+    // -60..0 dBFS -> 0..100%
+    const lvl = Math.max(0, Math.min(100, (s.audio_dbfs + 60) / 60 * 100));
+    $('audioBar').style.width = lvl + '%';
+    $('audioBar').style.background = s.audio_loud ? 'var(--danger)' : 'var(--blue)';
+  }catch(e){ /* serwer chwilowo niedostepny - probujemy dalej */ }
+}
+
+async function tickEvents(){
+  try{
+    const evs = await (await fetch('/api/events?limit=60')).json();
+    if(!evs.length){ return; }
+    $('events').innerHTML = evs.map(e => {
+      const thumb = e.snapshot
+        ? `<img src="${e.snapshot}" alt="">`
+        : `<div class="no-thumb">${e.kind === 'audio' ? '🔊' : '·'}</div>`;
+      const bits = [];
+      if(e.max_persons) bits.push(`${e.max_persons} os.`);
+      if(e.count_in) bits.push(`↓${e.count_in}`);
+      if(e.count_out) bits.push(`↑${e.count_out}`);
+      if(e.peak_dbfs != null) bits.push(`${e.peak_dbfs.toFixed(0)} dBFS`);
+      bits.push(fmtDur(e.duration_s));
+      if(e.cloud) bits.push('☁︎');
+      return `<div class="ev" data-clip="${e.clip||''}" data-id="${e.id}" data-time="${fmtTime(e.started_at)}">
+        ${thumb}
+        <div class="ev-meta">
+          <div class="ev-time"><span class="tag ${e.kind}">${KIND_PL[e.kind]||e.kind}</span>${fmtTime(e.started_at)}</div>
+          <div class="ev-sub">${bits.join(' · ')}</div>
+        </div></div>`;
+    }).join('');
+
+    document.querySelectorAll('.ev').forEach(el => el.onclick = () => {
+      const clip = el.dataset.clip;
+      if(!clip){ return; }
+      $('video').src = clip;
+      $('playerInfo').textContent = `Zdarzenie #${el.dataset.id} · ${el.dataset.time}`;
+      $('player').showModal();
+    });
+  }catch(e){}
+}
+
+$('player').addEventListener('close', () => { $('video').pause(); $('video').removeAttribute('src'); });
+
+async function tickChart(){
+  try{
+    const {minutes} = await (await fetch('/api/stats?minutes=180')).json();
+    const c = $('chart'), ctx = c.getContext('2d');
+    const w = c.width, h = c.height;
+    ctx.clearRect(0,0,w,h);
+    if(!minutes.length) return;
+    const now = Math.floor(Date.now()/60000);
+    const buckets = new Array(180).fill(0);
+    minutes.forEach(m => { const i = 179 - (now - m.minute); if(i >= 0 && i < 180) buckets[i] = m.persons; });
+    const max = Math.max(1, ...buckets);
+    const bw = w / 180;
+    buckets.forEach((v,i) => {
+      if(!v) return;
+      const bh = Math.max(2, v / max * (h - 12));
+      ctx.fillStyle = v > 1 ? '#4cc38a' : '#2f6f52';
+      ctx.fillRect(i*bw, h - bh, Math.max(1, bw - 1), bh);
+    });
+    ctx.fillStyle = '#8b98a8'; ctx.font = '10px sans-serif';
+    ctx.fillText('szczyt: ' + max + ' os./min', 4, 11);
+  }catch(e){}
+}
+
+tickState(); tickEvents(); tickChart();
+setInterval(tickState, 1000);
+setInterval(tickEvents, 4000);
+setInterval(tickChart, 20000);
+</script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# HallWatch - konfiguracja
+# Wszystkie wspolrzedne (linie, strefy, maski) sa ZNORMALIZOWANE do 0..1,
+# wiec przezywaja zmiane rozdzielczosci kamery. Wyznacz je komenda:
+#   hallwatch zones
+# ---------------------------------------------------------------------------
+
+camera:
+  # RTSP kamery, albo "0" = wbudowana kamera Maca, albo sciezka do pliku .mp4
+  # (plik = idealny do rozwoju, dopoki kamera nie przyjechala)
+  source: "0"
+  name: "korytarz"
+  # szerokosc do przetwarzania; mniejsza = szybciej. null = natywna
+  width: 960
+  fps_limit: 15
+  reconnect_delay_s: 3.0
+
+  # continuous - strumien otwarty non stop. Dla kamery z zasilaniem.
+  # on_demand  - laczymy sie dopiero na sygnal. DLA KAMERY NA BATERII: trzymanie
+  #              otwartego RTSP nie pozwala kamerze zasnac i zjada akumulator
+  #              w kilka dni. Sygnal wysylasz przez:
+  #                curl -X POST http://127.0.0.1:8000/api/wake
+  #                hallwatch wake
+  #              albo automatyzacja z huba / Home Assistanta na detekcje ruchu.
+  mode: "continuous"
+  session_seconds: 90 # twardy limit jednej sesji
+  session_idle_s: 20 # cisza, po ktorej rozlaczamy sie i kamera zasypia
+  active_hours: null # np. "07:00-23:00" - poza tym oknem sygnaly sa ignorowane
+
+detection:
+  model: "yolo11n.pt" # n=najszybszy, s/m = dokladniejsze
+  device: "auto" # auto | mps | cuda | cpu
+  # UWAGA przy kamerze pod sufitem patrzacej prosto w dol: COCO uczono glownie
+  # na ujeciach z boku, wiec widok z gory obniza pewnosc detekcji. Jesli osoby
+  # sa gubione, zejdz do 0.25-0.30 i/albo wez model "yolo11s.pt".
+  conf: 0.40
+  iou: 0.50
+  classes: [0] # 0 = person (COCO)
+  imgsz: 640
+  tracker: "bytetrack.yaml"
+  # YOLO chodzi tylko gdy pipeline jest "wybudzony" ruchem - oszczedza CPU
+  awake_seconds: 8.0
+
+motion:
+  enabled: true
+  min_area_frac: 0.0015 # ulamek powierzchni kadru
+  history: 400
+  var_threshold: 24
+  dilate_iter: 2
+  # ile klatek na starcie zignorowac (uczenie tla)
+  warmup_frames: 30
+
+counting:
+  # Punkt sylwetki decydujacy o przekroczeniu linii i obecnosci w strefie.
+  #   feet   - kamera patrzy z boku albo skosem w dol korytarza (domyslne)
+  #   center - kamera pod sufitem patrzy PROSTO W DOL; z gory nie ma "stop",
+  #            a dolna krawedz boxa skacze z kazdym krokiem
+  # Nie wiesz, co wybrac? Odpal 'hallwatch run' i patrz na kropke przy boxie:
+  # ma sie trzymac jednego miejsca sylwetki, a nie latac.
+  anchor: "feet"
+
+  # linia zliczajaca - osoba ja przekracza wchodzac/wychodzac
+  line: [[0.08, 0.62], [0.92, 0.62]]
+  direction_labels:
+    positive: "wejscie"
+    negative: "wyjscie"
+  # strefy obecnosci - ile osob stoi w danym obszarze
+  zones:
+    - name: "strefa-wejscia"
+      polygon: [[0.05, 0.30], [0.48, 0.30], [0.48, 0.97], [0.05, 0.97]]
+
+privacy:
+  # Maski nakladane PRZED nagraniem, streamem i uploadem do chmury.
+  # Tu zaslaniasz obszar poza Twoja czescia korytarza - np. drzwi trzeciego
+  # mieszkania, ktore nie jest Twoje.
+  masks: []
+  # przyklad:
+  # - name: "drzwi-trzeciego-mieszkania"
+  #   polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
+  #   mode: "blur" # blur | black | pixelate
+  #   strength: 35
+
+recording:
+  enabled: true
+  dir: "data/clips"
+  pre_roll_s: 4.0 # sekundy PRZED zdarzeniem (bufor pierscieniowy)
+  post_roll_s: 6.0
+  max_clip_s: 120
+  fps: 12
+  crf: 26
+  snapshot: true
+  burn_overlay: false # true = wypal boxy/licznik w nagraniu
+  retention_days: 14 # 'hallwatch prune' usuwa starsze
+
+audio:
+  enabled: false # dziala tylko dla zrodla RTSP z audio
+  sample_rate: 16000
+  frame_ms: 100
+  trigger_dbfs: -34.0 # glosniej niz to = zdarzenie
+  release_dbfs: -40.0 # histereza
+  min_event_s: 0.4
+
+storage:
+  db: "data/hallwatch.db"
+
+cloud:
+  enabled: false
+  # dziala z kazdym S3-compatible: Cloudflare R2, Backblaze B2, MinIO, AWS S3
+  endpoint_url: "" # np. https://<account>.r2.cloudflarestorage.com
+  bucket: ""
+  prefix: "hallwatch"
+  region: "auto"
+  delete_local_after_upload: false
+  # klucze czytane z env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
+
+notify:
+  enabled: false
+  ntfy_server: "https://ntfy.sh"
+  ntfy_topic: "" # np. hallwatch-Twoj-losowy-ciag
+  min_interval_s: 60
+  attach_snapshot: true
+
+web:
+  host: "127.0.0.1"
+  port: 8000
+  stream_fps: 10
+  stream_quality: 70
