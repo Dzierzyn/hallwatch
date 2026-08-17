@@ -65,6 +65,10 @@
          border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px}
   button:hover{border-color:var(--muted)}
   .empty{padding:26px 14px;color:var(--muted);text-align:center;font-size:13px}
+  .hrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .hrow-right{display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:0}
+  .hint{font-size:11px;color:var(--muted);font-weight:400}
+  #watchBtn.on{background:#1d3b2c;border-color:#2f6f52;color:var(--accent)}
 </style>
 </head>
 <body>
@@ -76,7 +80,13 @@
 <main>
   <div>
     <div class="card">
-      <h2>Podgląd live</h2>
+      <h2 class="hrow">
+        <span>Podgląd live</span>
+        <span class="hrow-right">
+          <span id="watchInfo" class="hint"></span>
+          <button id="watchBtn" hidden>Podgląd na żądanie</button>
+        </span>
+      </h2>
       <img id="live" src="/stream.mjpg" alt="podgląd na żywo">
     </div>
     <div class="card" style="margin-top:16px">
@@ -127,8 +137,14 @@ async function tickState(){
     if (s.motion) p += pill('ruch', 'warn');
     if (s.audio_enabled) p += pill(`audio ${s.audio_dbfs.toFixed(0)} dBFS`, s.audio_loud ? 'rec' : '');
     if (s.privacy_masks) p += pill(`${s.privacy_masks} maski prywatności`, 'on');
+    if (s.mode === 'on_demand')
+      p += pill(s.session_active ? `sesja #${s.sessions}` : 'kamera śpi', s.session_active ? 'on' : '');
     if (s.last_error) p += pill('błąd: ' + s.last_error, 'rec');
     $('pills').innerHTML = p;
+
+    $('watchBtn').hidden = s.mode !== 'on_demand';
+    if (s.mode === 'on_demand' && !watching)
+      $('watchInfo').textContent = s.session_active ? 'sesja aktywna' : 'kamera śpi';
 
     const zones = Object.entries(s.zones || {});
     $('stats').innerHTML = [
@@ -145,6 +161,8 @@ async function tickState(){
       ['urządzenie', s.device],
       ['czas detekcji', s.detect_ms.toFixed(1)+' ms'],
       ['klatek łącznie', s.frames_total.toLocaleString('pl-PL')],
+      ['tryb', s.mode === 'on_demand' ? 'on_demand (bateria)' : 'continuous'],
+      ['sesje', s.mode === 'on_demand' ? s.sessions : '—'],
       ['reconnecty', s.reconnects],
       ['chmura', s.cloud_status],
       ['retencja', s.retention_days + ' dni'],
@@ -215,6 +233,36 @@ async function tickChart(){
     ctx.fillText('szczyt: ' + max + ' os./min', 4, 11);
   }catch(e){}
 }
+
+// --- Podgląd na żądanie (tryb on_demand, kamera na baterii) -----------------
+// Kamera bateryjna zasypia po ciszy w kadrze. Dopóki ten przycisk jest
+// włączony i karta jest widoczna, wysyłamy puls "patrzę", który trzyma sesję
+// otwartą. Ukrycie karty albo wyłączenie przycisku pozwala kamerze zasnąć.
+let watching = false, watchTimer = null;
+
+async function pingWatch(){
+  if(!watching || document.hidden) return;
+  try{
+    const r = await (await fetch('/api/watch', {method:'POST'})).json();
+    $('watchInfo').textContent = r.holding
+      ? `budżet: ${Math.round(r.budget_left_s)} s`
+      : (r.detail || '');
+  }catch(e){}
+}
+
+function setWatching(on){
+  watching = on;
+  const b = $('watchBtn');
+  b.classList.toggle('on', on);
+  b.textContent = on ? '● Podglądam — kliknij, by uśpić' : 'Podgląd na żądanie';
+  clearInterval(watchTimer);
+  if(on){ pingWatch(); watchTimer = setInterval(pingWatch, 10000); }
+  else { $('watchInfo').textContent = 'kamera może zasnąć'; }
+}
+
+$('watchBtn').onclick = () => setWatching(!watching);
+// karta schowana = nie budzimy kamery na darmo
+document.addEventListener('visibilitychange', () => { if(!document.hidden) pingWatch(); });
 
 tickState(); tickEvents(); tickChart();
 setInterval(tickState, 1000);

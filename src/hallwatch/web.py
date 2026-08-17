@@ -113,6 +113,11 @@ def create_app(cfg: Config, pipeline: Pipeline) -> FastAPI:
             status_code=202 if accepted else 200,
         )
 
+    @app.post("/api/watch")
+    def watch() -> JSONResponse:
+        """Puls 'patrze' z dashboardu - trzyma sesje otwarta na czas podgladu."""
+        return JSONResponse(pipeline.hold_session())
+
     @app.get("/api/stats")
     def api_stats(minutes: int = 180) -> JSONResponse:
         since = time.time() - minutes * 60

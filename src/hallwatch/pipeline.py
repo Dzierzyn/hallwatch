@@ -67,6 +67,7 @@ class LiveState:
     mode: str = "continuous"
     session_active: bool = False
     sessions: int = 0
+    watch_until: float = 0.0
     started_at: float = field(default_factory=time.time)
     source: str = ""
     device: str = ""
@@ -105,6 +106,8 @@ class Pipeline:
         self._best_frame: np.ndarray | None = None
         self._best_persons: int = -1
         self._awake_until: float = 0.0
+        self._watch_until: float = 0.0  # dopoki teraz < tego, ktos patrzy
+        self._session_started: float = 0.0
 
         # bufor statystyk minutowych (zapis do DB raz na sekunde, nie co klatke)
         self._pending = {"frames": 0, "motion": 0, "persons": 0, "in": 0, "out": 0}
@@ -185,9 +188,14 @@ class Pipeline:
             self._process_frame(frame, ts, source)
 
             if deadline is not None:
-                if ts > deadline:
+                if ts < self._watch_until:
+                    # ktos patrzy - nie rozlaczaj sie, choc w kadrze cisza.
+                    # Bezpiecznik chroni bateria przed zapomniana zakladka.
+                    if ts - self._session_started > cfg.camera.watch_max_s:
+                        return "watch-limit"
+                elif ts > deadline:
                     return "limit"
-                if ts - self._last_activity > cfg.camera.session_idle_s:
+                elif ts - self._last_activity > cfg.camera.session_idle_s:
                     return "idle"
         return "stop"
 
@@ -231,6 +239,7 @@ class Pipeline:
     def _session(self) -> None:
         cfg = self.cfg
         started = time.time()
+        self._session_started = started
         log.info("Sesja: lacze sie ze zrodlem")
         # nowy model tla na kazda sesje - stary jest bezuzyteczny po przerwie,
         # a warmup skrocony, bo o zdarzeniu wiemy z sygnalu wybudzenia
@@ -274,6 +283,31 @@ class Pipeline:
         log.info("Sygnal wybudzenia (%s)", source)
         self._wake.set()
         return True
+
+    def hold_session(self) -> dict:
+        """Puls z dashboardu: 'patrze, nie rozlaczaj sie'.
+
+        Wolane cyklicznie, dopoki karta przegladarki jest widoczna. Jesli sesji
+        nie ma, budzi kamere; jesli jest, przedluza ja o watch_hold_s.
+        """
+        cfg = self.cfg
+        if cfg.camera.mode != "on_demand":
+            return {"holding": False, "detail": "tryb continuous - strumien jest ciagly"}
+
+        now = time.time()
+        self._watch_until = now + cfg.camera.watch_hold_s
+        with self._state_lock:
+            active = self.state.session_active
+            self.state.watch_until = self._watch_until
+        if not active:
+            self._wake.set()
+        remaining = max(0.0, cfg.camera.watch_max_s - (now - self._session_started)) if active else cfg.camera.watch_max_s
+        return {
+            "holding": True,
+            "session_active": active,
+            "hold_s": cfg.camera.watch_hold_s,
+            "budget_left_s": round(remaining, 1),
+        }
 
     def _process_frame(self, frame: np.ndarray, ts: float, source: FrameSource) -> None:
         cfg = self.cfg

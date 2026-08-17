@@ -26,6 +26,10 @@ camera:
   session_seconds: 90 # twardy limit jednej sesji
   session_idle_s: 20 # cisza, po ktorej rozlaczamy sie i kamera zasypia
   active_hours: null # np. "07:00-23:00" - poza tym oknem sygnaly sa ignorowane
+  # Podglad na zadanie: przycisk w dashboardzie trzyma sesje otwarta, dopoki
+  # patrzysz - nawet gdy w kadrze nic sie nie rusza.
+  watch_hold_s: 25 # ile jeden puls z przegladarki przytrzymuje sesje
+  watch_max_s: 600 # bezpiecznik: zapomniana zakladka nie rozladuje baterii
 
 detection:
   model: "yolo11n.pt" # n=najszybszy, s/m = dokladniejsze

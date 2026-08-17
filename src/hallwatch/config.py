@@ -25,6 +25,11 @@ class CameraCfg(BaseModel):
     session_idle_s: float = 20.0  # cisza, po ktorej rozlaczamy sie i wracamy do snu
     active_hours: str | None = None  # np. "07:00-23:00"; null = bez ograniczen
 
+    # Podglad na zadanie: dashboard trzyma sesje otwarta, dopoki patrzysz,
+    # nawet gdy w kadrze nic sie nie dzieje.
+    watch_hold_s: float = 25.0  # ile jeden puls z przegladarki przytrzymuje sesje
+    watch_max_s: float = 600.0  # bezpiecznik: zapomniana zakladka nie rozladuje baterii
+
 
 class DetectionCfg(BaseModel):
     model: str = "yolo11n.pt"
