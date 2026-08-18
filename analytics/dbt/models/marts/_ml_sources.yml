@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: hallwatch_ml
+    description: "Wyniki modeli zapisane przez warstwe ML (poza dbt)."
+    schema: "{{ 'main_ml' if target.type == 'duckdb' else env_var('HW_BQ_DATASET', 'hallwatch') ~ '_ml' }}"
+    tables:
+      - name: ml_hourly_forecast
+      - name: ml_hourly_anomaly

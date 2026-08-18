@@ -1,0 +1,27 @@
+name: hallwatch
+version: "0.1.0"
+config-version: 2
+profile: hallwatch
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # katalog z Parquet dla targetu dev (DuckDB czyta pliki wprost)
+  raw_dir: "../data/raw"
+  # strefa, w ktorej interpretujemy 'godzine dnia' w analityce
+  timezone: "Europe/Warsaw"
+
+models:
+  hallwatch:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts

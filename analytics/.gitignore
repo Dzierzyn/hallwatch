@@ -1,0 +1,14 @@
+.venv/
+.venv-airflow/
+.airflow-home/
+data/
+.state/
+logs/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+.env
+__pycache__/
+*.egg-info/
+*.duckdb
+dbt/.user.yml

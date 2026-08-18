@@ -1,0 +1,63 @@
+"""Inzynieria cech dla prognozy ruchu godzinowego.
+
+Decyzja projektowa: prognozujemy z horyzontem 24 h metoda BEZPOSREDNIA, a nie
+rekurencyjna. Model dostaje wylacznie cechy, ktore sa znane na 24 h przed
+prognozowana godzina (opoznienia >= 24 h). Dzieki temu nie trzeba podawac
+wlasnych predykcji na wejscie i nie kumuluje sie blad - a ocena offline
+odpowiada temu, co model realnie zobaczy w produkcji.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+HORIZON_H = 24
+TARGET = "events"
+
+# opoznienia dostepne na >= 24 h przed prognozowana godzina
+LAGS = (24, 25, 48, 168, 169)
+ROLLINGS = (24, 168)
+
+
+def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
+    ts = pd.to_datetime(df["hour_ts"])
+    out = df.copy()
+    out["hour_of_day"] = ts.dt.hour
+    out["day_of_week"] = ts.dt.dayofweek  # 0=poniedzialek
+    out["is_weekend"] = (out["day_of_week"] >= 5).astype(int)
+    out["day_of_month"] = ts.dt.day
+    # kodowanie cykliczne: 23:00 i 00:00 maja byc blisko siebie,
+    # a liczbowo 23 i 0 sa najdalej jak sie da
+    out["hour_sin"] = np.sin(2 * np.pi * out["hour_of_day"] / 24)
+    out["hour_cos"] = np.cos(2 * np.pi * out["hour_of_day"] / 24)
+    out["dow_sin"] = np.sin(2 * np.pi * out["day_of_week"] / 7)
+    out["dow_cos"] = np.cos(2 * np.pi * out["day_of_week"] / 7)
+    return out
+
+
+def add_lags(df: pd.DataFrame, target: str = TARGET) -> pd.DataFrame:
+    out = df.sort_values("hour_ts").copy()
+    for lag in LAGS:
+        out[f"lag_{lag}"] = out[target].shift(lag)
+    for win in ROLLINGS:
+        # shift(HORIZON_H) najpierw: srednia nie moze widziec przyszlosci
+        out[f"roll_mean_{win}"] = out[target].shift(HORIZON_H).rolling(win, min_periods=2).mean()
+        out[f"roll_std_{win}"] = out[target].shift(HORIZON_H).rolling(win, min_periods=2).std()
+    return out
+
+
+def feature_columns(df: pd.DataFrame) -> list[str]:
+    base = [
+        "hour_of_day", "day_of_week", "is_weekend", "day_of_month",
+        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+    ]
+    lagged = [c for c in df.columns if c.startswith(("lag_", "roll_"))]
+    return base + sorted(lagged)
+
+
+def build(df: pd.DataFrame, target: str = TARGET) -> pd.DataFrame:
+    """Z martu godzinowego robi macierz cech dla jednej kamery."""
+    out = add_calendar(df)
+    out = add_lags(out, target)
+    return out.dropna(subset=[c for c in out.columns if c.startswith("lag_")])

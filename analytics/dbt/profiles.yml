@@ -1,0 +1,19 @@
+hallwatch:
+  target: "{{ env_var('HW_TARGET', 'dev') }}"
+  outputs:
+    # dev: DuckDB czyta Parquet z dysku - pelny pipeline bez konta w chmurze
+    dev:
+      type: duckdb
+      path: "{{ env_var('HW_DUCKDB', '../data/warehouse.duckdb') }}"
+      threads: 4
+      extensions: [parquet]
+    # prod: BigQuery przez gcloud ADC (bez plikow z kluczami w repo)
+    prod:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('HW_GCP_PROJECT', 'unset') }}"
+      dataset: "{{ env_var('HW_BQ_DATASET', 'hallwatch') }}"
+      location: "{{ env_var('HW_BQ_LOCATION', 'EU') }}"
+      threads: 4
+      priority: interactive
+      job_retries: 2

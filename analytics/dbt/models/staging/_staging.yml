@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: "Zdarzenia po oczyszczeniu: czas UTC i lokalny, kamera z JSON-a."
+    columns:
+      - name: event_id
+        description: "Klucz glowny zdarzenia."
+        tests: [unique, not_null]
+      - name: camera
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["korytarz", "ulica", "nieznana"]
+      - name: event_kind
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["person", "vehicle", "motion", "audio"]
+      - name: started_at
+        tests: [not_null]
+      - name: duration_s
+        tests:
+          - dbt_utils_non_negative  # test wlasny, patrz macros/tests.sql
+
+  - name: stg_crossings
+    columns:
+      - name: crossing_id
+        tests: [unique, not_null]
+      - name: event_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_events')
+                field: event_id
+      - name: direction
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["wejscie", "wyjscie"]
+
+  - name: stg_minute_stats
+    columns:
+      - name: minute_epoch
+        tests: [unique, not_null]

@@ -1,0 +1,67 @@
+# Lokalny Airflow do rozwoju i demonstracji.
+#   docker compose up -d    -> UI na http://localhost:8080 (admin/admin)
+#
+# Poswiadczenia GCP wchodza przez podmontowany katalog gcloud (ADC), zeby
+# zaden plik z kluczem nie musial lezec w repozytorium.
+
+x-airflow-common: &airflow-common
+  build: .
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    # konfiguracja ELT
+    HW_TARGET: "${HW_TARGET:-dev}"
+    HW_SOURCE_DB: /opt/hallwatch/data/hallwatch.db
+    HW_RAW_DIR: /opt/hallwatch/data/raw
+    HW_STATE_DIR: /opt/hallwatch/data/.state
+    HW_DUCKDB: /opt/hallwatch/data/warehouse.duckdb
+    HW_GCP_PROJECT: "${HW_GCP_PROJECT:-}"
+    HW_BQ_DATASET: "${HW_BQ_DATASET:-hallwatch}"
+    HW_BQ_LOCATION: "${HW_BQ_LOCATION:-EU}"
+    HW_GCS_BUCKET: "${HW_GCS_BUCKET:-}"
+    GOOGLE_APPLICATION_CREDENTIALS: /home/airflow/.config/gcloud/application_default_credentials.json
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./dbt:/opt/hallwatch/dbt
+    - ./data:/opt/hallwatch/data
+    - ./logs:/opt/airflow/logs
+    - ~/.config/gcloud:/home/airflow/.config/gcloud:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username admin --password admin
+               --firstname a --lastname b --role Admin --email admin@example.com || true"
+    restart: on-failure
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports: ["8080:8080"]
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+
+volumes:
+  pgdata:

@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: hallwatch_raw
+    description: "Surowe zdarzenia wyekstrahowane z SQLite pipeline'u CV, jako Parquet."
+    schema: "{{ env_var('HW_BQ_RAW_DATASET', 'hallwatch_raw') }}"
+    meta:
+      # dev/DuckDB czyta pliki wprost; BigQuery ignoruje i uzywa tabel w datasecie
+      external_location: "{{ var('raw_dir') }}/{name}/**/*.parquet"
+    tables:
+      - name: events
+        description: "Jedno zdarzenie = jeden epizod aktywnosci na kamerze."
+      - name: crossings
+        description: "Pojedyncze przekroczenie linii zliczajacej przez sledzony obiekt."
+      - name: minute_stats
+        description: "Agregaty minutowe zapisywane na biezaco przez pipeline."

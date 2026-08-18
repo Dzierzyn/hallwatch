@@ -197,6 +197,14 @@ src/hallwatch/
   tools.py      scan / probe / edytor stref / selftest
 ```
 
+## Warstwa analityczna
+
+Zdarzenia z kamer sa zrodlem dla osobnego pipeline'u danych w
+[analytics/](analytics/README.md): przyrostowy extract do Parquet, BigQuery
+przez tabele zewnetrzne nad GCS, modelowanie w dbt (9 modeli, 23 testy),
+prognoza ruchu na 24 h i wykrywanie anomalii, orkiestrowane Airflowem.
+Caly stos da sie uruchomic lokalnie na DuckDB, bez konta w chmurze.
+
 ## Dalsze kroki
 
 - ReID między zdarzeniami (ta sama osoba wróciła po godzinie?)

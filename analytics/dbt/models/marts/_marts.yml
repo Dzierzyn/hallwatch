@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: fct_events
+    description: "Tabela faktow na ziarnie pojedynczego zdarzenia."
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: camera
+        tests: [not_null]
+
+  - name: agg_hourly_traffic
+    description: >
+      Ziarno: godzina x kamera, w czasie lokalnym, z wypelnionymi zerami dla
+      godzin bez ruchu. Tabela wejsciowa dla modelu prognozujacego.
+    columns:
+      - name: hour_ts
+        tests: [not_null]
+      - name: events
+        tests: [not_null, dbt_utils_non_negative]
+
+  - name: agg_daily_summary
+    columns:
+      - name: traffic_date
+        tests: [not_null]
+
+  - name: mart_traffic_monitor
+    description: "Fakty + prognoza + anomalie w jednym miejscu, pod dashboard i alerty."
+    columns:
+      - name: hour_ts
+        tests: [not_null]
