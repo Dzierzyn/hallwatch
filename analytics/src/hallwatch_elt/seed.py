@@ -46,16 +46,19 @@ STREET_WEEKEND = [
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, started_at REAL NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, camera TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL, started_at REAL NOT NULL,
     ended_at REAL, max_persons INTEGER DEFAULT 0, count_in INTEGER DEFAULT 0,
     count_out INTEGER DEFAULT 0, peak_dbfs REAL, clip_path TEXT, snapshot_path TEXT,
-    cloud_key TEXT, meta TEXT);
+    cloud_key TEXT, sampled INTEGER DEFAULT 0, sample_weight REAL DEFAULT 1.0, meta TEXT);
 CREATE TABLE IF NOT EXISTS crossings (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, ts REAL NOT NULL,
     track_id INTEGER, direction TEXT);
 CREATE TABLE IF NOT EXISTS minute_stats (
-    minute INTEGER PRIMARY KEY, frames INTEGER DEFAULT 0, motion INTEGER DEFAULT 0,
-    persons INTEGER DEFAULT 0, count_in INTEGER DEFAULT 0, count_out INTEGER DEFAULT 0);
+    camera TEXT NOT NULL DEFAULT '', minute INTEGER NOT NULL,
+    frames INTEGER DEFAULT 0, motion INTEGER DEFAULT 0,
+    persons INTEGER DEFAULT 0, count_in INTEGER DEFAULT 0, count_out INTEGER DEFAULT 0,
+    PRIMARY KEY (camera, minute));
 """
 
 
@@ -86,10 +89,14 @@ def generate(
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
 
+    # (nazwa, kind, bazowe natezenie/h, srednia dlugosc s, duty_cycle)
+    # Ulica pracuje w trybie probkowania: obserwujemy 5 minut na godzine, wiec
+    # ZAPISUJEMY tylko ta czesc ruchu, ktora naprawde bylo widac, i doklejamy
+    # wage 1/duty do ekstrapolacji. Dzieki temu warstwa analityczna ma szanse
+    # odtworzyc prawdziwe natezenie, a demo nie klamie o tym, co widziano.
     cameras = [
-        # (nazwa, kind, bazowe natezenie/h, srednia dlugosc zdarzenia s)
-        ("korytarz", "person", 3.2, 22.0),
-        ("ulica", "vehicle", 38.0, 9.0),
+        ("korytarz", "person", 3.2, 22.0, 1.0),
+        ("ulica", "vehicle", 38.0, 9.0, 5.0 / 60.0),
     ]
 
     events: list[tuple] = []
@@ -104,7 +111,7 @@ def generate(
         hod = hour_start.hour
         is_weekend = hour_start.weekday() >= 5
 
-        for camera, kind, base_rate, mean_dur in cameras:
+        for camera, kind, base_rate, mean_dur, duty in cameras:
             rate = base_rate * _profile(camera, is_weekend)[hod]
 
             # anomalie: rzadkie, ale wyrazne - material dla detektora
@@ -114,7 +121,10 @@ def generate(
             # sezonowa fala tygodniowa, zeby model mial czego sie uczyc poza doba
             rate *= 1.0 + 0.12 * math.sin(2 * math.pi * h / (24 * 7))
 
-            n_events = rng.poisson(max(0.01, rate * anomaly))
+            # obserwujemy tylko duty * godzine, wiec tyle zdarzen widzimy
+            n_events = rng.poisson(max(0.001, rate * anomaly * duty))
+            sampled = duty < 1.0
+            weight = 1.0 / duty
             for _ in range(int(n_events)):
                 event_id += 1
                 offset = rng.uniform(0, 3600)
@@ -132,11 +142,14 @@ def generate(
                 c_out = int(rng.binomial(n_obj, lean_out))
                 c_in = n_obj - c_out
 
+                has_media = kind == "person"  # ulicy nie archiwizujemy
                 events.append((
-                    event_id, kind, started, ended, n_obj, c_in, c_out,
+                    event_id, camera, kind, started, ended, n_obj, c_in, c_out,
                     float(rng.uniform(-52, -28)) if rng.random() < 0.25 else None,
-                    f"data/clips/{int(started)}.mp4", f"data/clips/{int(started)}.jpg",
-                    None, json.dumps({"camera": camera}, ensure_ascii=False),
+                    f"data/clips/{camera}/{int(started)}.mp4" if has_media else None,
+                    f"data/clips/{camera}/{int(started)}.jpg" if has_media else None,
+                    None, int(sampled), weight,
+                    json.dumps({"mode": "sampling" if sampled else "on_demand"}, ensure_ascii=False),
                 ))
 
                 for direction, count in (("wejscie", c_in), ("wyjscie", c_out)):
@@ -147,7 +160,7 @@ def generate(
                         ))
 
                 minute = int(started // 60)
-                row = minute_rows.setdefault(minute, [0, 0, 0, 0, 0])
+                row = minute_rows.setdefault((camera, minute), [0, 0, 0, 0, 0])
                 row[0] += int(duration * 12)      # frames
                 row[1] += 1                        # motion
                 row[2] = max(row[2], n_obj)        # persons (szczyt)
@@ -155,17 +168,18 @@ def generate(
                 row[4] += c_out
 
     conn.executemany(
-        "INSERT INTO events(id,kind,started_at,ended_at,max_persons,count_in,count_out,"
-        "peak_dbfs,clip_path,snapshot_path,cloud_key,meta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO events(id,camera,kind,started_at,ended_at,max_persons,count_in,count_out,"
+        "peak_dbfs,clip_path,snapshot_path,cloud_key,sampled,sample_weight,meta) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         events,
     )
     conn.executemany(
         "INSERT INTO crossings(id,event_id,ts,track_id,direction) VALUES(?,?,?,?,?)", crossings
     )
     conn.executemany(
-        "INSERT INTO minute_stats(minute,frames,motion,persons,count_in,count_out) "
-        "VALUES(?,?,?,?,?,?)",
-        [(m, *v) for m, v in sorted(minute_rows.items())],
+        "INSERT INTO minute_stats(camera,minute,frames,motion,persons,count_in,count_out) "
+        "VALUES(?,?,?,?,?,?,?)",
+        [(cam, m, *v) for (cam, m), v in sorted(minute_rows.items())],
     )
     conn.commit()
     conn.close()

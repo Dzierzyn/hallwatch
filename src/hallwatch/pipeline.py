@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from . import draw
 from .audio import AudioEvent, AudioMonitor
 from .capture import FrameSource
 from .cloud import CloudUploader
-from .config import Config
+from .config import CameraProfile, Config
 from .counter import PeopleCounter
 from .detect import Detection, PersonDetector
 from .motion import MotionDetector
@@ -39,6 +40,9 @@ from .recorder import EventRecorder
 from .store import Store
 
 log = logging.getLogger(__name__)
+
+# klasy COCO traktowane zbiorczo jako "pojazd" w statystykach ruchu
+VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "train"}
 
 
 @dataclass
@@ -64,7 +68,9 @@ class LiveState:
     reconnects: int = 0
     frames_total: int = 0
     detect_ms: float = 0.0
+    camera: str = ""
     mode: str = "continuous"
+    sampling_window: bool = False
     session_active: bool = False
     sessions: int = 0
     watch_until: float = 0.0
@@ -76,24 +82,37 @@ class LiveState:
 
 
 class Pipeline:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        profile: CameraProfile | None = None,
+        store: Store | None = None,
+        uploader: CloudUploader | None = None,
+        notifier: Notifier | None = None,
+    ) -> None:
         self.cfg = cfg
-        self.state = LiveState(source=cfg.camera.source, mode=cfg.camera.mode)
+        self.prof = profile or cfg.cameras[0]
+        prof = self.prof
+        self.state = LiveState(source=prof.source, mode=prof.mode, camera=prof.name)
         self._state_lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
 
-        self.store = Store(cfg.path(cfg.storage.db))
-        self.masker = PrivacyMasker(cfg.privacy.masks)
-        self.motion = MotionDetector(cfg.motion)
-        self.counter = PeopleCounter(cfg.counting)
-        self.recorder = EventRecorder(cfg.recording, cfg.path(cfg.recording.dir))
-        self.notifier = Notifier(cfg.notify)
-        self.uploader = CloudUploader(cfg.cloud, on_uploaded=self._on_uploaded).start()
-        self.detector: PersonDetector | None = None
+        # baza, chmura i powiadomienia sa WSPOLNE dla wszystkich kamer - jedna
+        # os czasu zdarzen i jedna kolejka uploadu. Menedzer je wstrzykuje;
+        # przy uruchomieniu pojedynczej kamery tworzymy wlasne.
+        self._owns_shared = store is None
+        self.store = store or Store(cfg.path(cfg.storage.db))
+        self.notifier = notifier or Notifier(cfg.notify)
+        self.uploader = uploader or CloudUploader(cfg.cloud, on_uploaded=self._on_uploaded).start()
 
-        self.audio = AudioMonitor(cfg.camera.source, cfg.audio, on_event=self._on_audio_event)
+        self.masker = PrivacyMasker(prof.privacy.masks)
+        self.motion = MotionDetector(prof.motion)
+        self.counter = PeopleCounter(prof.counting)
+        self.recorder = EventRecorder(prof.recording, cfg.path(prof.clip_dir))
+        self.detector: PersonDetector | None = None
+        self.audio = AudioMonitor(prof.source, prof.audio, on_event=self._on_audio_event)
 
         # stan zdarzenia
         self._event_id: int | None = None
@@ -105,11 +124,12 @@ class Pipeline:
         self._event_peak_dbfs: float | None = None
         self._best_frame: np.ndarray | None = None
         self._best_persons: int = -1
+        self._event_classes: Counter[str] = Counter()
         self._awake_until: float = 0.0
-        self._watch_until: float = 0.0  # dopoki teraz < tego, ktos patrzy
+        self._watch_until: float = 0.0
         self._session_started: float = 0.0
+        self._sampling_window: bool = False
 
-        # bufor statystyk minutowych (zapis do DB raz na sekunde, nie co klatke)
         self._pending = {"frames": 0, "motion": 0, "persons": 0, "in": 0, "out": 0}
         self._last_flush = time.time()
         self._fps_ema = 0.0
@@ -134,13 +154,14 @@ class Pipeline:
             self._thread.join(timeout=10.0)
         self.audio.stop()
         self._close_event(time.time(), reason="shutdown")
-        self.uploader.stop()
-        self.store.close()
+        if self._owns_shared:
+            self.uploader.stop()
+            self.store.close()
 
     # -- petla glowna -------------------------------------------------------
     def run(self) -> None:
-        cfg = self.cfg
-        self.detector = PersonDetector(cfg.detection)
+        cfg, prof = self.cfg, self.prof
+        self.detector = PersonDetector(self.prof.detection)
         with self._state_lock:
             self.state.device = self.detector.device
             self.state.cloud_status = (
@@ -148,28 +169,33 @@ class Pipeline:
             )
 
         self.audio.start()
-        if cfg.audio.enabled:
+        if prof.audio.enabled:
             with self._state_lock:
                 self.state.audio_status = self.audio.error or "on"
 
-        if cfg.camera.mode == "on_demand":
-            self._run_on_demand()
-        else:
-            self._run_continuous()
+        match prof.mode:
+            case "on_demand":
+                self._run_on_demand()
+            case "sampling":
+                self._run_sampling()
+            case _:
+                self._run_continuous()
 
     def _open_source(self) -> FrameSource:
-        cfg = self.cfg
+        cfg, prof = self.cfg, self.prof
         return FrameSource(
-            cfg.camera.source,
-            width=cfg.camera.width,
-            fps_limit=cfg.camera.fps_limit,
-            reconnect_delay_s=cfg.camera.reconnect_delay_s,
+            prof.source,
+            width=prof.width,
+            fps_limit=prof.fps_limit,
+            reconnect_delay_s=prof.reconnect_delay_s,
         ).start()
 
-    def _pump(self, source: FrameSource, deadline: float | None = None) -> str:
+    def _pump(
+        self, source: FrameSource, deadline: float | None = None, idle_exit: bool = True
+    ) -> str:
         """Przetwarza klatki, dopoki jest po co. Zwraca powod wyjscia."""
-        cfg = self.cfg
-        min_interval = 1.0 / cfg.camera.fps_limit if cfg.camera.fps_limit else 0.0
+        cfg, prof = self.cfg, self.prof
+        min_interval = 1.0 / prof.fps_limit if prof.fps_limit else 0.0
         last_loop = 0.0
 
         while not self._stop.is_set():
@@ -191,16 +217,17 @@ class Pipeline:
                 if ts < self._watch_until:
                     # ktos patrzy - nie rozlaczaj sie, choc w kadrze cisza.
                     # Bezpiecznik chroni bateria przed zapomniana zakladka.
-                    if ts - self._session_started > cfg.camera.watch_max_s:
+                    if ts - self._session_started > prof.watch_max_s:
                         return "watch-limit"
                 elif ts > deadline:
                     return "limit"
-                elif ts - self._last_activity > cfg.camera.session_idle_s:
+                elif idle_exit and ts - self._last_activity > prof.session_idle_s:
                     return "idle"
         return "stop"
 
     def _run_continuous(self) -> None:
-        log.info("Pipeline wystartowal w trybie continuous (zrodlo=%s)", self.cfg.camera.source)
+        prof = self.prof
+        log.info("Pipeline wystartowal w trybie continuous (zrodlo=%s)", self.prof.source)
         source = self._open_source()
         try:
             reason = self._pump(source)
@@ -220,12 +247,12 @@ class Pipeline:
         z huba), lapiemy krotka sesje i rozlaczamy sie, zeby kamera wrocila do
         snu.
         """
-        cfg = self.cfg
+        cfg, prof = self.cfg, self.prof
         log.info(
             "Pipeline wystartowal w trybie on_demand (sesja max %.0fs, cisza %.0fs%s)",
-            cfg.camera.session_seconds,
-            cfg.camera.session_idle_s,
-            f", godziny {cfg.camera.active_hours}" if cfg.camera.active_hours else "",
+            prof.session_seconds,
+            prof.session_idle_s,
+            f", godziny {prof.active_hours}" if prof.active_hours else "",
         )
         while not self._stop.is_set():
             if not self._wake.wait(timeout=1.0):
@@ -236,14 +263,16 @@ class Pipeline:
                 continue
             self._session()
 
-    def _session(self) -> None:
-        cfg = self.cfg
+    def _session(
+        self, max_seconds: float | None = None, idle_exit: bool = True, tag: str = "Sesja"
+    ) -> None:
+        cfg, prof = self.cfg, self.prof
         started = time.time()
         self._session_started = started
-        log.info("Sesja: lacze sie ze zrodlem")
+        log.info("%s: lacze sie ze zrodlem", tag)
         # nowy model tla na kazda sesje - stary jest bezuzyteczny po przerwie,
         # a warmup skrocony, bo o zdarzeniu wiemy z sygnalu wybudzenia
-        self.motion = MotionDetector(cfg.motion.model_copy(update={"warmup_frames": 3}))
+        self.motion = MotionDetector(prof.motion.model_copy(update={"warmup_frames": 3}))
         self._last_activity = started
         with self._state_lock:
             self.state.session_active = True
@@ -251,17 +280,60 @@ class Pipeline:
 
         source = self._open_source()
         try:
-            reason = self._pump(source, deadline=started + cfg.camera.session_seconds)
+            limit = max_seconds if max_seconds is not None else prof.session_seconds
+            reason = self._pump(source, deadline=started + limit, idle_exit=idle_exit)
         finally:
             source.stop()
             self._close_event(time.time(), reason="session-end")
             with self._state_lock:
                 self.state.session_active = False
-        log.info("Sesja zakonczona po %.1fs (%s) - kamera moze zasnac",
-                 time.time() - started, reason)
+        log.info("%s zakonczona po %.1fs (%s) - kamera moze zasnac",
+                 tag, time.time() - started, reason)
+
+    # -- tryb probkowania (statystyki ruchu) --------------------------------
+    def _run_sampling(self) -> None:
+        """Obserwuje krotkie okno co ustalony czas i ekstrapoluje.
+
+        Liczenie pojazdow z wyzwalacza ruchu daloby smieci: PIR przegapia
+        wiekszosc samochodow i nie wiadomo ktore, wiec liczby nie znaczylyby nic.
+        Probkowanie jest uczciwsze - wiemy dokladnie, jaka czesc czasu widzielismy
+        (duty cycle), i kazde zdarzenie niesie mnoznik do ekstrapolacji.
+
+        Okna sa domyslnie wyrownane do zegara, zeby probki z roznych dni
+        pokrywaly te same fragmenty godziny - inaczej porownania miedzy dobami
+        mieszalyby szczyt z cisza.
+        """
+        prof = self.prof
+        s = prof.sampling
+        log.info(
+            "Pipeline wystartowal w trybie sampling: %.0fs co %.0f min (widzimy %.1f%% czasu)",
+            s.seconds, s.every_minutes, s.duty_cycle * 100,
+        )
+        first = True
+        while not self._stop.is_set():
+            if not first:
+                wait_s = self._seconds_to_next_window()
+                log.info("Nastepne okno za %.0fs - kamera spi", wait_s)
+                if self._stop.wait(wait_s):
+                    break
+            first = False
+            if not self._in_active_window():
+                continue
+            self._sampling_window = True
+            try:
+                self._session(max_seconds=s.seconds, idle_exit=False, tag="Okno probkowania")
+            finally:
+                self._sampling_window = False
+
+    def _seconds_to_next_window(self) -> float:
+        period = max(60.0, self.prof.sampling.every_minutes * 60.0)
+        if not self.prof.sampling.align_to_clock:
+            return period
+        return period - (time.time() % period)
 
     def _in_active_window(self, now: float | None = None) -> bool:
-        window = self.cfg.camera.active_hours
+        prof = self.prof
+        window = self.prof.active_hours
         if not window:
             return True
         try:
@@ -278,7 +350,8 @@ class Pipeline:
 
     def wake(self, source: str = "api") -> bool:
         """Zglasza wybudzenie. Zwraca False, gdy tryb continuous (nic nie robi)."""
-        if self.cfg.camera.mode != "on_demand":
+        prof = self.prof
+        if self.prof.mode != "on_demand":
             return False
         log.info("Sygnal wybudzenia (%s)", source)
         self._wake.set()
@@ -290,27 +363,27 @@ class Pipeline:
         Wolane cyklicznie, dopoki karta przegladarki jest widoczna. Jesli sesji
         nie ma, budzi kamere; jesli jest, przedluza ja o watch_hold_s.
         """
-        cfg = self.cfg
-        if cfg.camera.mode != "on_demand":
+        cfg, prof = self.cfg, self.prof
+        if prof.mode != "on_demand":
             return {"holding": False, "detail": "tryb continuous - strumien jest ciagly"}
 
         now = time.time()
-        self._watch_until = now + cfg.camera.watch_hold_s
+        self._watch_until = now + prof.watch_hold_s
         with self._state_lock:
             active = self.state.session_active
             self.state.watch_until = self._watch_until
         if not active:
             self._wake.set()
-        remaining = max(0.0, cfg.camera.watch_max_s - (now - self._session_started)) if active else cfg.camera.watch_max_s
+        remaining = max(0.0, prof.watch_max_s - (now - self._session_started)) if active else prof.watch_max_s
         return {
             "holding": True,
             "session_active": active,
-            "hold_s": cfg.camera.watch_hold_s,
+            "hold_s": prof.watch_hold_s,
             "budget_left_s": round(remaining, 1),
         }
 
     def _process_frame(self, frame: np.ndarray, ts: float, source: FrameSource) -> None:
-        cfg = self.cfg
+        cfg, prof = self.cfg, self.prof
 
         # 1. prywatnosc PRZED czymkolwiek innym
         frame = self.masker.apply(frame)
@@ -322,7 +395,7 @@ class Pipeline:
         detections: list[Detection] = []
         detect_ms = 0.0
         if motion.detected:
-            self._awake_until = ts + cfg.detection.awake_seconds
+            self._awake_until = ts + prof.detection.awake_seconds
         awake = ts < self._awake_until
         if awake and self.detector is not None:
             t0 = time.perf_counter()
@@ -332,7 +405,7 @@ class Pipeline:
         # detekcje, ktorych kotwica wpada w maske prywatnosci - odrzucamy
         # (martwa sciezka, dopoki privacy.masks jest puste)
         if self.masker.active and detections:
-            anchor_mode = cfg.counting.anchor
+            anchor_mode = prof.counting.anchor
             detections = [
                 d
                 for d in detections
@@ -342,6 +415,9 @@ class Pipeline:
         # 4. liczenie
         crossings = self.counter.update(detections, frame.shape, ts)
         persons = len(detections)
+        if detections and self.detector is not None:
+            for d in detections:
+                self._event_classes[self.detector.names.get(d.cls, str(d.cls))] += 1
 
         # 5. maszyna stanow zdarzenia
         activity = motion.detected or persons > 0
@@ -360,7 +436,7 @@ class Pipeline:
             annotated,
             detections,
             self.detector.names if self.detector else {},
-            anchor_mode=cfg.counting.anchor,
+            anchor_mode=prof.counting.anchor,
         )
 
         fps = self._fps(ts)
@@ -377,7 +453,7 @@ class Pipeline:
                 draw.YELLOW,
             ),
         ]
-        if self.cfg.audio.enabled and self.audio.available:
+        if self.prof.audio.enabled and self.audio.available:
             hud.append(
                 (
                     f"audio {self.audio.level_dbfs:6.1f} dBFS",
@@ -390,7 +466,7 @@ class Pipeline:
             draw.draw_rec_indicator(annotated)
 
         # 7. nagranie: czysta klatka (zamaskowana) albo z wypalona nakladka
-        self.recorder.push(annotated if cfg.recording.burn_overlay else frame, ts)
+        self.recorder.push(annotated if prof.recording.burn_overlay else frame, ts)
 
         # kadr "najlepszy" do miniatury zdarzenia = najwiecej osob naraz
         if self._event_id is not None and persons >= self._best_persons:
@@ -420,6 +496,7 @@ class Pipeline:
             s.audio_dbfs = self.audio.level_dbfs
             s.audio_loud = self.audio.loud
             s.reconnects = source.reconnects
+            s.sampling_window = self._sampling_window
             s.frames_total += 1
             s.detect_ms = detect_ms
 
@@ -433,6 +510,7 @@ class Pipeline:
         if ts - self._last_flush >= 1.0:
             self.store.bump_minute(
                 ts,
+                camera=prof.name,
                 frames=self._pending["frames"],
                 motion=self._pending["motion"],
                 persons=self._pending["persons"],
@@ -460,13 +538,14 @@ class Pipeline:
         persons: int,
         crossings: list,
     ) -> None:
+        prof = self.prof
         if self._event_id is None:
             if activity:
                 self._open_event(ts, kind="person" if persons else "motion")
         else:
             self._event_max_persons = max(self._event_max_persons, persons)
             quiet_for = ts - self._last_activity
-            if quiet_for > self.cfg.recording.post_roll_s:
+            if quiet_for > self.prof.recording.post_roll_s:
                 self._close_event(ts, reason="quiet")
 
         for c in crossings:
@@ -478,7 +557,16 @@ class Pipeline:
             log.info("Przekroczenie linii: track #%d -> %s", c.track_id, c.direction)
 
     def _open_event(self, ts: float, kind: str) -> None:
-        self._event_id = self.store.open_event(kind, ts, meta={"camera": self.cfg.camera.name})
+        prof = self.prof
+        sampled = self._sampling_window
+        self._event_id = self.store.open_event(
+            kind,
+            ts,
+            camera=prof.name,
+            sampled=sampled,
+            sample_weight=(1.0 / prof.sampling.duty_cycle) if sampled else 1.0,
+            meta={"mode": prof.mode},
+        )
         self._event_started = ts
         self._event_max_persons = 0
         self._event_in = 0
@@ -486,10 +574,12 @@ class Pipeline:
         self._event_peak_dbfs = None
         self._best_frame = None
         self._best_persons = -1
+        self._event_classes = Counter()
         self.recorder.start(ts)
         log.info("Zdarzenie #%s otwarte (%s)", self._event_id, kind)
 
     def _close_event(self, ts: float, reason: str = "quiet") -> None:
+        prof = self.prof
         if self._event_id is None:
             return
         event_id = self._event_id
@@ -500,9 +590,7 @@ class Pipeline:
         if self._best_frame is not None:
             snapshot = self.recorder.snapshot(self._best_frame, self._event_started)
 
-        kind = "person" if self._event_max_persons > 0 else "motion"
-        if self._event_peak_dbfs is not None and self._event_max_persons == 0:
-            kind = "audio"
+        kind = self._event_kind()
 
         self.store.close_event(
             event_id,
@@ -528,7 +616,7 @@ class Pipeline:
         if self._event_max_persons > 0:
             labels = self.counter.cfg.direction_labels
             self.notifier.send_async(
-                f"{self.cfg.camera.name}: {self._event_max_persons} os.",
+                f"{self.prof.name}: {self._event_max_persons} os.",
                 f"Zdarzenie #{event_id}, czas {ts - self._event_started:.0f}s, "
                 f"{labels.positive}: {self._event_in}, {labels.negative}: {self._event_out}",
                 "default",
@@ -536,18 +624,38 @@ class Pipeline:
                 snapshot,
             )
 
+    def _event_kind(self) -> str:
+        """Rodzaj zdarzenia z faktycznie wykrytych klas, nie z zalozenia.
+
+        Kamera uliczna liczy pojazdy, korytarzowa ludzi - zapisywanie wszystkiego
+        jako 'person' zafalszowaloby dane u samego zrodla, a warstwa analityczna
+        nie miala by jak tego odkrecic.
+        """
+        if self._event_max_persons == 0:
+            return "audio" if self._event_peak_dbfs is not None else "motion"
+        top = self._event_classes.most_common(1)
+        if not top:
+            return "motion"
+        name = top[0][0]
+        if name == "person":
+            return "person"
+        if name in VEHICLE_CLASSES:
+            return "vehicle"
+        return name
+
     def _on_audio_event(self, ev: AudioEvent) -> None:
         """Callback z watku audio - dolacza szczyt do trwajacego zdarzenia albo tworzy nowe."""
+        prof = self.prof
         log.info("Zdarzenie audio: %.1f dBFS, %.1fs", ev.peak_dbfs, ev.duration_s)
         if self._event_id is not None:
             self._event_peak_dbfs = max(self._event_peak_dbfs or -120.0, ev.peak_dbfs)
             return
-        event_id = self.store.open_event("audio", ev.started_at, meta={"camera": self.cfg.camera.name})
+        event_id = self.store.open_event("audio", ev.started_at, meta={"camera": self.prof.name})
         self.store.close_event(
             event_id, ended_at=ev.ended_at, peak_dbfs=ev.peak_dbfs, kind="audio"
         )
         self.notifier.send_async(
-            f"{self.cfg.camera.name}: dzwiek",
+            f"{self.prof.name}: dzwiek",
             f"Szczyt {ev.peak_dbfs:.1f} dBFS przez {ev.duration_s:.1f}s",
             "default",
             "loud_sound",
@@ -568,13 +676,72 @@ class Pipeline:
             return self.state.jpeg, self.state.jpeg_seq
 
 
+class PipelineManager:
+    """Po jednym Pipeline na kamere, ze WSPOLDZIELONA baza, chmura i ntfy.
+
+    Wspoldzielenie nie jest optymalizacja, tylko warunkiem poprawnosci: zdarzenia
+    z korytarza i z ulicy musza lezec na jednej osi czasu w jednej bazie, inaczej
+    warstwa analityczna nie zlaczy ich w jeden obraz. Kolejka uploadu tez jest
+    jedna, zeby dwie kamery nie biły sie o lacze.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        self.store = Store(cfg.path(cfg.storage.db))
+        self.notifier = Notifier(cfg.notify)
+        self.uploader = CloudUploader(cfg.cloud, on_uploaded=self._on_uploaded).start()
+        self.pipelines: dict[str, Pipeline] = {
+            prof.slug: Pipeline(cfg, prof, self.store, self.uploader, self.notifier)
+            for prof in cfg.cameras
+        }
+
+    def _on_uploaded(self, event_id: int, key: str) -> None:
+        if event_id:
+            self.store.close_event(event_id, cloud_key=key)
+
+    def start(self) -> "PipelineManager":
+        for slug, pipe in self.pipelines.items():
+            log.info("Uruchamiam kamere '%s' (%s)", pipe.prof.name, pipe.prof.mode)
+            pipe.start()
+        return self
+
+    def stop(self) -> None:
+        for pipe in self.pipelines.values():
+            pipe.stop()
+        self.uploader.stop()
+        self.store.close()
+
+    def get(self, slug: str | None = None) -> Pipeline:
+        if slug is None:
+            return next(iter(self.pipelines.values()))
+        if slug not in self.pipelines:
+            raise KeyError(slug)
+        return self.pipelines[slug]
+
+    @property
+    def slugs(self) -> list[str]:
+        return list(self.pipelines)
+
+
 def prune(cfg: Config) -> tuple[int, int]:
-    """Usuwa media starsze niz recording.retention_days. Zwraca (pliki, zdarzenia)."""
+    """Usuwa media starsze niz retention_days. Zwraca (pliki, zdarzenia).
+
+    Retencja jest ustawiana per kamera, wiec kazde zdarzenie oceniamy wedlug
+    progu JEGO kamery - inaczej krotsza retencja ulicy kasowalaby nagrania
+    z korytarza.
+    """
     store = Store(cfg.path(cfg.storage.db))
-    cutoff = time.time() - cfg.recording.retention_days * 86400
+    now = time.time()
+    by_camera = {cam.name: cam.recording.retention_days for cam in cfg.cameras}
+    default_days = min(by_camera.values())
     removed_files = 0
-    events = store.events_older_than(cutoff)
+    events = store.events_older_than(now - min(by_camera.values()) * 86400)
+    touched = 0
     for ev in events:
+        days = by_camera.get(ev.camera, default_days)
+        if ev.started_at >= now - days * 86400:
+            continue  # ta kamera trzyma dluzej
+        touched += 1
         for rel in (ev.clip_path, ev.snapshot_path):
             if not rel:
                 continue
@@ -584,4 +751,4 @@ def prune(cfg: Config) -> tuple[int, int]:
                 removed_files += 1
         store.clear_media(ev.id)
     store.close()
-    return removed_files, len(events)
+    return removed_files, touched

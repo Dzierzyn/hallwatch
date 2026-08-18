@@ -5,6 +5,7 @@ with src as (
 )
 
 select
+    coalesce(nullif(camera, ''), 'nieznana') as camera,
     cast(minute as bigint)              as minute_epoch,
     {{ epoch_min_to_ts('minute') }}     as minute_ts,
     cast(frames as bigint)              as frames,

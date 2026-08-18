@@ -17,6 +17,7 @@ from typing import Any
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera        TEXT NOT NULL DEFAULT '',
     kind          TEXT NOT NULL,
     started_at    REAL NOT NULL,
     ended_at      REAL,
@@ -27,9 +28,14 @@ CREATE TABLE IF NOT EXISTS events (
     clip_path     TEXT,
     snapshot_path TEXT,
     cloud_key     TEXT,
+    -- probkowanie: zdarzenie zlapane w oknie obserwacji, a nie w spisie ciaglym.
+    -- sample_weight to 1/duty_cycle, czyli mnoznik do ekstrapolacji.
+    sampled       INTEGER DEFAULT 0,
+    sample_weight REAL DEFAULT 1.0,
     meta          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_started ON events(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_camera  ON events(camera, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS crossings (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,19 +48,31 @@ CREATE TABLE IF NOT EXISTS crossings (
 CREATE INDEX IF NOT EXISTS idx_crossings_ts ON crossings(ts DESC);
 
 CREATE TABLE IF NOT EXISTS minute_stats (
-    minute     INTEGER PRIMARY KEY,
+    camera     TEXT NOT NULL DEFAULT '',
+    minute     INTEGER NOT NULL,
     frames     INTEGER DEFAULT 0,
     motion     INTEGER DEFAULT 0,
     persons    INTEGER DEFAULT 0,
     count_in   INTEGER DEFAULT 0,
-    count_out  INTEGER DEFAULT 0
+    count_out  INTEGER DEFAULT 0,
+    PRIMARY KEY (camera, minute)
 );
 """
+
+# kolumny dodane po fakcie - migracja dla baz zalozonych wczesniej
+MIGRATIONS = {
+    "events": {
+        "camera": "ALTER TABLE events ADD COLUMN camera TEXT NOT NULL DEFAULT ''",
+        "sampled": "ALTER TABLE events ADD COLUMN sampled INTEGER DEFAULT 0",
+        "sample_weight": "ALTER TABLE events ADD COLUMN sample_weight REAL DEFAULT 1.0",
+    },
+}
 
 
 @dataclass
 class Event:
     id: int
+    camera: str
     kind: str
     started_at: float
     ended_at: float | None
@@ -65,6 +83,8 @@ class Event:
     clip_path: str | None
     snapshot_path: str | None
     cloud_key: str | None
+    sampled: int
+    sample_weight: float
     meta: dict[str, Any]
 
 
@@ -78,14 +98,33 @@ class Store:
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
 
+    def _migrate(self) -> None:
+        """Dokłada kolumny, ktorych brakuje w bazach zalozonych wczesniej."""
+        for table, columns in MIGRATIONS.items():
+            existing = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    self._conn.execute(ddl)
+
     # -- zapis --------------------------------------------------------------
-    def open_event(self, kind: str, started_at: float, meta: dict | None = None) -> int:
+    def open_event(
+        self,
+        kind: str,
+        started_at: float,
+        camera: str = "",
+        sampled: bool = False,
+        sample_weight: float = 1.0,
+        meta: dict | None = None,
+    ) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO events(kind, started_at, meta) VALUES(?,?,?)",
-                (kind, started_at, json.dumps(meta or {}, ensure_ascii=False)),
+                "INSERT INTO events(camera, kind, started_at, sampled, sample_weight, meta) "
+                "VALUES(?,?,?,?,?,?)",
+                (camera, kind, started_at, int(sampled), sample_weight,
+                 json.dumps(meta or {}, ensure_ascii=False)),
             )
             self._conn.commit()
             return int(cur.lastrowid or 0)
@@ -111,31 +150,39 @@ class Store:
             self._conn.commit()
 
     def bump_minute(
-        self, ts: float, frames: int = 0, motion: int = 0, persons: int = 0,
+        self, ts: float, camera: str = "", frames: int = 0, motion: int = 0, persons: int = 0,
         count_in: int = 0, count_out: int = 0,
     ) -> None:
         minute = int(ts // 60)
         with self._lock:
             self._conn.execute(
-                """INSERT INTO minute_stats(minute, frames, motion, persons, count_in, count_out)
-                   VALUES(?,?,?,?,?,?)
-                   ON CONFLICT(minute) DO UPDATE SET
+                """INSERT INTO minute_stats(camera, minute, frames, motion, persons,
+                                            count_in, count_out)
+                   VALUES(?,?,?,?,?,?,?)
+                   ON CONFLICT(camera, minute) DO UPDATE SET
                      frames=frames+excluded.frames,
                      motion=motion+excluded.motion,
                      persons=MAX(persons, excluded.persons),
                      count_in=count_in+excluded.count_in,
                      count_out=count_out+excluded.count_out""",
-                (minute, frames, motion, persons, count_in, count_out),
+                (camera, minute, frames, motion, persons, count_in, count_out),
             )
             self._conn.commit()
 
     # -- odczyt -------------------------------------------------------------
-    def recent_events(self, limit: int = 50, kind: str | None = None) -> list[Event]:
+    def recent_events(
+        self, limit: int = 50, kind: str | None = None, camera: str | None = None
+    ) -> list[Event]:
         q = "SELECT * FROM events"
-        args: list[Any] = []
+        clauses, args = [], []
         if kind:
-            q += " WHERE kind=?"
+            clauses.append("kind=?")
             args.append(kind)
+        if camera:
+            clauses.append("camera=?")
+            args.append(camera)
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
         q += " ORDER BY started_at DESC LIMIT ?"
         args.append(limit)
         with self._lock:

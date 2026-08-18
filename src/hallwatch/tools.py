@@ -257,10 +257,11 @@ class ZoneEditor:
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=None)
 
 
-def edit_zones(cfg: Config, source: str | None = None) -> None:
-    source = source or cfg.camera.source
-    print(f"Pobieram klatke ze zrodla: {source}")
-    src = FrameSource(source, width=cfg.camera.width).start()
+def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None) -> None:
+    prof = cfg.camera(camera)
+    source = source or prof.source
+    print(f"Kamera '{prof.name}', zrodlo: {source}")
+    src = FrameSource(source, width=prof.width).start()
     frame = None
     for _ in range(60):  # kilka klatek na rozgrzanie autoexpozycji
         frame, _ = src.read(timeout=6.0)
@@ -294,9 +295,9 @@ def edit_zones(cfg: Config, source: str | None = None) -> None:
             editor.points, editor.line, editor.zones, editor.masks = [], None, [], []
             print("  wyczyszczono")
         elif key == ord("s"):
-            out = cfg.root / "zones.generated.yaml"
+            out = cfg.root / f"zones.{prof.slug}.yaml"
             out.write_text(editor.as_yaml(), encoding="utf-8")
-            print(f"\n  zapisano {out}\n  Przekopiuj sekcje 'counting' i 'privacy' do config.yaml:\n")
+            print(f"\n  zapisano {out}\n  Wklej 'counting' i 'privacy' pod wpis kamery '{prof.name}' w config.yaml:\n")
             print(editor.as_yaml())
     cv2.destroyAllWindows()
 
@@ -375,7 +376,7 @@ def selftest(cfg: Config) -> bool:
 
         from .detect import PersonDetector
 
-        det = PersonDetector(cfg.detection)
+        det = PersonDetector(cfg.cameras[0].detection)
         img = cv2.imread(str(ASSETS / "bus.jpg"))
         found = det.detect(img, track=False)
         print(f"   urzadzenie: {det.device}, wykryte osoby: {len(found)}")
@@ -401,22 +402,25 @@ def selftest(cfg: Config) -> bool:
     def run_on(video_path: Path, tag: str) -> tuple:
         test_cfg = cfg.model_copy(deep=True)
         test_cfg.root = cfg.root
-        test_cfg.camera.source = str(video_path)
-        test_cfg.camera.fps_limit = None
-        test_cfg.audio.enabled = False
+        cam = test_cfg.cameras[0]
+        cam.source = str(video_path)
+        cam.fps_limit = None
+        cam.mode = "continuous"
+        cam.audio.enabled = False
+        cam.privacy.masks = []
+        cam.recording.dir = f"data/selftest/clips-{tag}"
+        cam.recording.post_roll_s = 1.0
+        test_cfg.cameras = [cam]
         test_cfg.notify.enabled = False
         test_cfg.cloud.enabled = False
-        test_cfg.privacy.masks = []
         test_cfg.storage.db = f"data/selftest/{tag}.db"
-        test_cfg.recording.dir = f"data/selftest/clips-{tag}"
-        test_cfg.recording.post_roll_s = 1.0
 
-        pipe = Pipeline(test_cfg)
+        pipe = Pipeline(test_cfg, test_cfg.cameras[0])
         pipe.run()
         result = (
             pipe.snapshot_state(),
             pipe.store.recent_events(limit=10),
-            list(test_cfg.path(test_cfg.recording.dir).glob("*.mp4")),
+            list(test_cfg.path(pipe.prof.clip_dir).glob("*.mp4")),
             pipe.counter.state,
         )
         pipe.stop()

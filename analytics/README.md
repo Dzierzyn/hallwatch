@@ -68,6 +68,13 @@ profil dobowy** w dev i w prod, a wykryłby to dopiero ktoś, kto porównałby
 wykresy. Analityka godzinowa liczy się w czasie lokalnym, bo „szczyt o 7 rano"
 ma znaczyć 7 rano u mieszkańca.
 
+**Próbkowanie jest właściwością kamery, nie wiersza.** Kamera uliczna obserwuje
+5 minut na godzinę, więc każde jej zdarzenie niesie wagę `1/duty_cycle`. Gdyby
+wagę brać z wiersza, godziny bez zaobserwowanego ruchu miałyby wagę 1 i wypadały
+z ekstrapolacji, systematycznie **zawyżając** średnie natężenie — w pierwszej
+wersji dawało to 29 zdarzeń/h zamiast prawdziwych 19. Waga jest więc ustalana
+per kamera i rozciągana na cały kręgosłup czasu.
+
 **Kręgosłup czasu wypełnia zera.** Godzina bez ruchu to nie brak danych, to
 informacja „zero". Bez `int_hour_spine` model nigdy nie zobaczyłby nocnej ciszy
 i systematycznie zawyżałby prognozy.

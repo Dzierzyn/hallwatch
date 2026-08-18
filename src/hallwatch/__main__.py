@@ -23,34 +23,39 @@ def setup_logging(verbose: bool = False) -> None:
 def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
     import uvicorn
 
-    from .pipeline import Pipeline
+    from .pipeline import PipelineManager
     from .web import create_app
 
+    if args.camera:
+        cfg.cameras = [cfg.camera(args.camera)]
     if args.source:
-        cfg.camera.source = args.source
+        cfg.cameras[0].source = args.source
     if args.mode:
-        cfg.camera.mode = args.mode
+        for cam in cfg.cameras:
+            cam.mode = args.mode
     if args.no_record:
-        cfg.recording.enabled = False
+        for cam in cfg.cameras:
+            cam.recording.enabled = False
 
-    pipeline = Pipeline(cfg).start()
-    app = create_app(cfg, pipeline)
+    manager = PipelineManager(cfg).start()
+    app = create_app(cfg, manager)
     url = f"http://{cfg.web.host}:{cfg.web.port}"
-    print(f"\n  HallWatch dziala  ->  {url}\n  Ctrl+C konczy\n")
+    cams = ", ".join(f"{c.name} [{c.mode}]" for c in cfg.cameras)
+    print(f"\n  HallWatch dziala  ->  {url}\n  Kamery: {cams}\n  Ctrl+C konczy\n")
     try:
         uvicorn.run(app, host=cfg.web.host, port=cfg.web.port, log_level="warning")
     except KeyboardInterrupt:
         pass
     finally:
         print("\nZamykam...")
-        pipeline.stop()
+        manager.stop()
     return 0
 
 
 def cmd_probe(args: argparse.Namespace, cfg: Config) -> int:
     from .tools import probe_source
 
-    source = args.source or cfg.camera.source
+    source = args.source or cfg.camera(args.camera).source
     return 0 if probe_source(source, seconds=args.seconds, preview=not args.no_preview) else 1
 
 
@@ -64,7 +69,7 @@ def cmd_scan(args: argparse.Namespace, cfg: Config) -> int:
 def cmd_zones(args: argparse.Namespace, cfg: Config) -> int:
     from .tools import edit_zones
 
-    edit_zones(cfg, args.source)
+    edit_zones(cfg, args.source, args.camera)
     return 0
 
 
@@ -79,8 +84,11 @@ def cmd_wake(args: argparse.Namespace, cfg: Config) -> int:
     import requests
 
     url = f"http://{cfg.web.host}:{cfg.web.port}/api/wake"
+    params = {"source": args.source_name}
+    if args.camera:
+        params["camera"] = args.camera
     try:
-        resp = requests.post(url, params={"source": args.source_name}, timeout=10)
+        resp = requests.post(url, params=params, timeout=10)
         data = resp.json()
         print(f"{'OK' if data.get('accepted') else 'POMINIETO'}: {data.get('detail')}")
         return 0
@@ -94,8 +102,7 @@ def cmd_prune(args: argparse.Namespace, cfg: Config) -> int:
     from .pipeline import prune
 
     files, events = prune(cfg)
-    print(f"Usunieto {files} plikow z {events} zdarzen starszych niz "
-          f"{cfg.recording.retention_days} dni")
+    print(f"Usunieto {files} plikow z {events} zdarzen przekraczajacych retencje")
     return 0
 
 
@@ -109,10 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="uruchom pipeline + dashboard")
+    p_run.add_argument("--camera", help="uruchom tylko wskazana kamere")
     p_run.add_argument("--source", help="nadpisz zrodlo z configu (RTSP / 0 / plik.mp4)")
     p_run.add_argument(
         "--mode",
-        choices=["continuous", "on_demand"],
+        choices=["continuous", "on_demand", "sampling"],
         help="nadpisz camera.mode (on_demand = kamera na baterii)",
     )
     p_run.add_argument("--no-record", action="store_true", help="nie zapisuj klipow")
@@ -120,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_probe = sub.add_parser("probe", help="sprawdz strumien i zmierz FPS")
     p_probe.add_argument("--source")
+    p_probe.add_argument("--camera", help="kamera z configu (domyslnie pierwsza)")
     p_probe.add_argument("--seconds", type=float, default=6.0)
     p_probe.add_argument("--no-preview", action="store_true", help="bez okna podgladu")
     p_probe.set_defaults(func=cmd_probe)
@@ -130,10 +139,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_zones = sub.add_parser("zones", help="interaktywnie wyznacz linie, strefy i maski")
     p_zones.add_argument("--source")
+    p_zones.add_argument("--camera", help="kamera z configu (domyslnie pierwsza)")
     p_zones.set_defaults(func=cmd_zones)
 
     p_wake = sub.add_parser("wake", help="obudz instancje w trybie on_demand")
     p_wake.add_argument("--source-name", default="cli", help="etykieta zrodla sygnalu")
+    p_wake.add_argument("--camera", help="ktora kamere obudzic")
     p_wake.set_defaults(func=cmd_wake)
 
     sub.add_parser("selftest", help="sprawdz caly pipeline bez kamery").set_defaults(

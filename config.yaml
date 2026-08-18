@@ -1,126 +1,146 @@
 # ---------------------------------------------------------------------------
-# HallWatch - konfiguracja
-# Wszystkie wspolrzedne (linie, strefy, maski) sa ZNORMALIZOWANE do 0..1,
-# wiec przezywaja zmiane rozdzielczosci kamery. Wyznacz je komenda:
-#   hallwatch zones
+# HallWatch - konfiguracja wielokamerowa
+#
+# `defaults` opisuje zachowanie wspolne, `cameras` liste kamer. Kazda kamera
+# nadpisuje tylko to, czym naprawde sie rozni. Wspolrzedne linii, stref i masek
+# sa ZNORMALIZOWANE do 0..1, wiec przezywaja zmiane rozdzielczosci.
+# Wyznacz je klikaniem:  hallwatch zones --camera korytarz
 # ---------------------------------------------------------------------------
 
-camera:
-  # RTSP kamery, albo "0" = wbudowana kamera Maca, albo sciezka do pliku .mp4
-  # (plik = idealny do rozwoju, dopoki kamera nie przyjechala)
-  source: "0"
-  name: "korytarz"
-  # szerokosc do przetwarzania; mniejsza = szybciej. null = natywna
+defaults:
   width: 960
   fps_limit: 15
   reconnect_delay_s: 3.0
+  mode: "continuous" # continuous | on_demand | sampling
 
-  # continuous - strumien otwarty non stop. Dla kamery z zasilaniem.
-  # on_demand  - laczymy sie dopiero na sygnal. DLA KAMERY NA BATERII: trzymanie
-  #              otwartego RTSP nie pozwala kamerze zasnac i zjada akumulator
-  #              w kilka dni. Sygnal wysylasz przez:
-  #                curl -X POST http://127.0.0.1:8000/api/wake
-  #                hallwatch wake
-  #              albo automatyzacja z huba / Home Assistanta na detekcje ruchu.
-  mode: "continuous"
-  session_seconds: 90 # twardy limit jednej sesji
-  session_idle_s: 20 # cisza, po ktorej rozlaczamy sie i kamera zasypia
-  active_hours: null # np. "07:00-23:00" - poza tym oknem sygnaly sa ignorowane
-  # Podglad na zadanie: przycisk w dashboardzie trzyma sesje otwarta, dopoki
-  # patrzysz - nawet gdy w kadrze nic sie nie rusza.
-  watch_hold_s: 25 # ile jeden puls z przegladarki przytrzymuje sesje
-  watch_max_s: 600 # bezpiecznik: zapomniana zakladka nie rozladuje baterii
+  detection:
+    model: "yolo11n.pt" # n=najszybszy, s/m=dokladniejsze
+    device: "auto" # auto | mps | cuda | cpu
+    conf: 0.40
+    iou: 0.50
+    imgsz: 640
+    tracker: "bytetrack.yaml"
+    awake_seconds: 8.0
 
-detection:
-  model: "yolo11n.pt" # n=najszybszy, s/m = dokladniejsze
-  device: "auto" # auto | mps | cuda | cpu
-  # UWAGA przy kamerze pod sufitem patrzacej prosto w dol: COCO uczono glownie
-  # na ujeciach z boku, wiec widok z gory obniza pewnosc detekcji. Jesli osoby
-  # sa gubione, zejdz do 0.25-0.30 i/albo wez model "yolo11s.pt".
-  conf: 0.40
-  iou: 0.50
-  classes: [0] # 0 = person (COCO)
-  imgsz: 640
-  tracker: "bytetrack.yaml"
-  # YOLO chodzi tylko gdy pipeline jest "wybudzony" ruchem - oszczedza CPU
-  awake_seconds: 8.0
+  motion:
+    enabled: true
+    min_area_frac: 0.0015
+    history: 400
+    var_threshold: 24
+    dilate_iter: 2
+    warmup_frames: 30
 
-motion:
-  enabled: true
-  min_area_frac: 0.0015 # ulamek powierzchni kadru
-  history: 400
-  var_threshold: 24
-  dilate_iter: 2
-  # ile klatek na starcie zignorowac (uczenie tla)
-  warmup_frames: 30
+  recording:
+    enabled: true
+    dir: "data/clips" # kazda kamera dostaje podkatalog ze swoim slugiem
+    pre_roll_s: 4.0
+    post_roll_s: 6.0
+    max_clip_s: 120
+    fps: 12
+    crf: 26
+    snapshot: true
+    burn_overlay: false
+    retention_days: 14
 
-counting:
-  # Punkt sylwetki decydujacy o przekroczeniu linii i obecnosci w strefie.
-  #   feet   - kamera patrzy z boku albo skosem w dol korytarza (domyslne)
-  #   center - kamera pod sufitem patrzy PROSTO W DOL; z gory nie ma "stop",
-  #            a dolna krawedz boxa skacze z kazdym krokiem
-  # Nie wiesz, co wybrac? Odpal 'hallwatch run' i patrz na kropke przy boxie:
-  # ma sie trzymac jednego miejsca sylwetki, a nie latac.
-  anchor: "feet"
+  audio:
+    enabled: false # dziala tylko dla RTSP ze sciezka audio
+    trigger_dbfs: -34.0
+    release_dbfs: -40.0
+    min_event_s: 0.4
 
-  # linia zliczajaca - osoba ja przekracza wchodzac/wychodzac
-  line: [[0.08, 0.62], [0.92, 0.62]]
-  direction_labels:
-    positive: "wejscie"
-    negative: "wyjscie"
-  # strefy obecnosci - ile osob stoi w danym obszarze
-  zones:
-    - name: "strefa-wejscia"
-      polygon: [[0.05, 0.30], [0.48, 0.30], [0.48, 0.97], [0.05, 0.97]]
+cameras:
+  # -------------------------------------------------------------------------
+  - name: "korytarz"
+    # Kamera na baterii przez Reolink Home Hub. Tryb on_demand nie trzyma
+    # otwartego RTSP - laczy sie na sygnal i pozwala kamerze zasnac.
+    #   curl -X POST 'http://127.0.0.1:8000/api/wake?camera=korytarz'
+    source: "0" # docelowo: rtsp://user:haslo@IP-HUBA:554/...
+    mode: "on_demand"
+    session_seconds: 90
+    session_idle_s: 20
+    watch_hold_s: 25
+    watch_max_s: 600
+    # active_hours: "06:00-23:00"   # odkomentuj, by oszczedzic bateria nocą
 
-privacy:
-  # Maski nakladane PRZED nagraniem, streamem i uploadem do chmury.
-  # Tu zaslaniasz obszar poza Twoja czescia korytarza - np. drzwi trzeciego
-  # mieszkania, ktore nie jest Twoje.
-  masks: []
-  # przyklad:
-  # - name: "drzwi-trzeciego-mieszkania"
-  #   polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
-  #   mode: "blur" # blur | black | pixelate
-  #   strength: 35
+    detection:
+      classes: [0] # 0 = person (COCO)
 
-recording:
-  enabled: true
-  dir: "data/clips"
-  pre_roll_s: 4.0 # sekundy PRZED zdarzeniem (bufor pierscieniowy)
-  post_roll_s: 6.0
-  max_clip_s: 120
-  fps: 12
-  crf: 26
-  snapshot: true
-  burn_overlay: false # true = wypal boxy/licznik w nagraniu
-  retention_days: 14 # 'hallwatch prune' usuwa starsze
+    counting:
+      # feet - kamera patrzy skosem w dol korytarza (tak trzeba przy PIR)
+      # center - gdyby patrzyla prosto w dol z sufitu
+      anchor: "feet"
+      line: [[0.08, 0.62], [0.92, 0.62]]
+      direction_labels:
+        positive: "wejscie"
+        negative: "wyjscie"
+      zones:
+        - name: "strefa-wejscia"
+          polygon: [[0.05, 0.30], [0.48, 0.30], [0.48, 0.97], [0.05, 0.97]]
 
-audio:
-  enabled: false # dziala tylko dla zrodla RTSP z audio
-  sample_rate: 16000
-  frame_ms: 100
-  trigger_dbfs: -34.0 # glosniej niz to = zdarzenie
-  release_dbfs: -40.0 # histereza
-  min_event_s: 0.4
+    privacy:
+      # Puste = nic nie jest zaslaniane. Kadr obejmuje wlasne drzwi, wiec maski
+      # nie sa potrzebne. Gdyby kadru nie dalo sie ograniczyc:
+      #   - name: "obszar-obcy"
+      #     polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
+      #     mode: "blur"
+      masks: []
+
+  # -------------------------------------------------------------------------
+  - name: "ulica"
+    # Kamera balkonowa liczaca pojazdy. Statystyki ruchu nie moga opierac sie
+    # na PIR - przegapilby wiekszosc aut i liczby nie znaczylyby nic. Zamiast
+    # tego probkujemy: 5 minut co godzine, czyli widzimy 8,3% czasu, a kazde
+    # zdarzenie niesie mnoznik do ekstrapolacji.
+    source: "0" # docelowo: rtsp://user:haslo@IP-HUBA:554/...
+    mode: "sampling"
+    sampling:
+      every_minutes: 60
+      seconds: 300
+      align_to_clock: true # okna o rownej godzinie => probki porownywalne miedzy dobami
+
+    detection:
+      # 2=car 3=motorcycle 5=bus 7=truck
+      classes: [2, 3, 5, 7]
+      # widok z gory/skosu na ulice jest trudniejszy niz ujecia z COCO
+      conf: 0.30
+
+    motion:
+      # ulica rusza sie caly czas - bramka ruchu nic tu nie oszczedza,
+      # a moglaby zgubic auto wjezdzajace w kadr powoli
+      enabled: false
+
+    counting:
+      anchor: "center" # pojazdy z gory to plamy, srodek jest stabilniejszy
+      line: [[0.05, 0.55], [0.95, 0.55]]
+      direction_labels:
+        positive: "w-prawo"
+        negative: "w-lewo"
+      zones: []
+
+    recording:
+      # Liczymy pojazdy, nie archiwizujemy ulicy. Statystyki ida do bazy,
+      # wideo nie zostaje - mniej danych do obrony i mniejsza karta.
+      enabled: false
+
+    privacy:
+      masks: []
 
 storage:
   db: "data/hallwatch.db"
 
 cloud:
   enabled: false
-  # dziala z kazdym S3-compatible: Cloudflare R2, Backblaze B2, MinIO, AWS S3
   endpoint_url: "" # np. https://<account>.r2.cloudflarestorage.com
   bucket: ""
   prefix: "hallwatch"
   region: "auto"
   delete_local_after_upload: false
-  # klucze czytane z env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
+  # klucze z env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
 
 notify:
   enabled: false
   ntfy_server: "https://ntfy.sh"
-  ntfy_topic: "" # np. hallwatch-Twoj-losowy-ciag
+  ntfy_topic: ""
   min_interval_s: 60
   attach_snapshot: true
 

@@ -68,12 +68,19 @@
   .hrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .hrow-right{display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:0}
   .hint{font-size:11px;color:var(--muted);font-weight:400}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{font-size:13px;padding:5px 12px;border-radius:7px;background:var(--panel-2);
+       border:1px solid var(--line);color:var(--muted);cursor:pointer;transition:all .12s}
+  .tab:hover{color:var(--text)}
+  .tab.active{background:#1d3b2c;border-color:#2f6f52;color:var(--accent)}
+  .tab small{display:block;font-size:10px;opacity:.75}
   #watchBtn.on{background:#1d3b2c;border-color:#2f6f52;color:var(--accent)}
 </style>
 </head>
 <body>
 <header>
-  <h1>HallWatch <span id="cam">—</span></h1>
+  <h1>HallWatch</h1>
+  <nav class="tabs" id="camTabs"></nav>
   <div class="pills" id="pills"></div>
 </header>
 
@@ -119,6 +126,37 @@
 
 <script>
 const $ = id => document.getElementById(id);
+// --- przelacznik kamer -----------------------------------------------------
+// Kazdy endpoint przyjmuje ?camera=<slug>; trzymamy aktualny wybor w jednym
+// miejscu i doklejamy go do wszystkich zapytan oraz do strumienia MJPEG.
+let CAM = new URLSearchParams(location.search).get('camera');
+let CAMERAS = [];
+const q = (path, extra='') => path + (CAM ? (path.includes('?') ? '&' : '?') + 'camera=' + CAM : '') + extra;
+
+async function loadCameras(){
+  try{
+    CAMERAS = await (await fetch('/api/cameras')).json();
+    if(!CAM && CAMERAS.length) CAM = CAMERAS[0].slug;
+    $('camTabs').innerHTML = CAMERAS.map(c => {
+      const sub = c.mode === 'sampling'
+        ? `próbkowanie ${(c.sampling.duty_cycle*100).toFixed(1)}%`
+        : c.mode;
+      return `<div class="tab ${c.slug===CAM?'active':''}" data-slug="${c.slug}">
+                ${c.name}<small>${sub}</small></div>`;
+    }).join('');
+    document.querySelectorAll('.tab').forEach(el => el.onclick = () => switchCamera(el.dataset.slug));
+  }catch(e){}
+}
+
+function switchCamera(slug){
+  if(slug === CAM) return;
+  CAM = slug;
+  setWatching(false);
+  document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.slug===slug));
+  $('live').src = q('/stream.mjpg') + '&t=' + Date.now();
+  $('events').innerHTML = '<div class="empty">Wczytuję…</div>';
+  tickState(); tickEvents();
+}
 const fmtTime = ts => new Date(ts*1000).toLocaleString('pl-PL',{hour12:false});
 const fmtDur = s => s == null ? '—' : (s < 60 ? s.toFixed(0)+' s' : Math.floor(s/60)+' min '+Math.round(s%60)+' s');
 const KIND_PL = {person:'osoba', motion:'ruch', audio:'dźwięk'};
@@ -127,9 +165,7 @@ function pill(text, cls=''){ return `<div class="pill ${cls}">${text}</div>`; }
 
 async function tickState(){
   try{
-    const s = await (await fetch('/api/state')).json();
-    $('cam').textContent = '· ' + s.camera_name;
-
+    const s = await (await fetch(q('/api/state'))).json();
     let p = '';
     p += pill(`${s.fps.toFixed(1)} FPS`, s.fps > 1 ? 'on' : 'warn');
     p += pill(s.awake ? 'YOLO aktywny' : 'czuwanie', s.awake ? 'on' : '');
@@ -137,6 +173,10 @@ async function tickState(){
     if (s.motion) p += pill('ruch', 'warn');
     if (s.audio_enabled) p += pill(`audio ${s.audio_dbfs.toFixed(0)} dBFS`, s.audio_loud ? 'rec' : '');
     if (s.privacy_masks) p += pill(`${s.privacy_masks} maski prywatności`, 'on');
+    if (s.classes && !s.classes.includes(0)) p += pill('pojazdy', 'on');
+    if (s.recording_enabled === false) p += pill('bez nagrywania', '');
+    if (s.mode === 'sampling')
+      p += pill(s.sampling_window ? '● okno próbkowania' : 'czeka na okno', s.sampling_window ? 'rec' : '');
     if (s.mode === 'on_demand')
       p += pill(s.session_active ? `sesja #${s.sessions}` : 'kamera śpi', s.session_active ? 'on' : '');
     if (s.last_error) p += pill('błąd: ' + s.last_error, 'rec');
@@ -161,7 +201,8 @@ async function tickState(){
       ['urządzenie', s.device],
       ['czas detekcji', s.detect_ms.toFixed(1)+' ms'],
       ['klatek łącznie', s.frames_total.toLocaleString('pl-PL')],
-      ['tryb', s.mode === 'on_demand' ? 'on_demand (bateria)' : 'continuous'],
+      ['tryb', s.mode === 'on_demand' ? 'on_demand (bateria)'
+              : s.mode === 'sampling' ? `sampling (${(s.duty_cycle*100||0).toFixed(1)}% czasu)` : 'continuous'],
       ['sesje', s.mode === 'on_demand' ? s.sessions : '—'],
       ['reconnecty', s.reconnects],
       ['chmura', s.cloud_status],
@@ -178,7 +219,7 @@ async function tickState(){
 
 async function tickEvents(){
   try{
-    const evs = await (await fetch('/api/events?limit=60')).json();
+    const evs = await (await fetch(q('/api/events?limit=60'))).json();
     if(!evs.length){ return; }
     $('events').innerHTML = evs.map(e => {
       const thumb = e.snapshot
@@ -190,6 +231,7 @@ async function tickEvents(){
       if(e.count_out) bits.push(`↑${e.count_out}`);
       if(e.peak_dbfs != null) bits.push(`${e.peak_dbfs.toFixed(0)} dBFS`);
       bits.push(fmtDur(e.duration_s));
+      if(e.sampled) bits.push(`próbka ×${e.sample_weight.toFixed(0)}`);
       if(e.cloud) bits.push('☁︎');
       return `<div class="ev" data-clip="${e.clip||''}" data-id="${e.id}" data-time="${fmtTime(e.started_at)}">
         ${thumb}
@@ -243,7 +285,7 @@ let watching = false, watchTimer = null;
 async function pingWatch(){
   if(!watching || document.hidden) return;
   try{
-    const r = await (await fetch('/api/watch', {method:'POST'})).json();
+    const r = await (await fetch(q('/api/watch'), {method:'POST'})).json();
     $('watchInfo').textContent = r.holding
       ? `budżet: ${Math.round(r.budget_left_s)} s`
       : (r.detail || '');
@@ -264,7 +306,10 @@ $('watchBtn').onclick = () => setWatching(!watching);
 // karta schowana = nie budzimy kamery na darmo
 document.addEventListener('visibilitychange', () => { if(!document.hidden) pingWatch(); });
 
-tickState(); tickEvents(); tickChart();
+loadCameras().then(() => {
+  $('live').src = q('/stream.mjpg');
+  tickState(); tickEvents(); tickChart();
+});
 setInterval(tickState, 1000);
 setInterval(tickEvents, 4000);
 setInterval(tickChart, 20000);

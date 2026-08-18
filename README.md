@@ -60,6 +60,32 @@ ls -lO .venv/lib/python3.12/site-packages/*.pth   # kolumna flag pokaże "hidden
 `make install` rozwiązuje to dwutorowo: zdejmuje flagę (`make fix-pth`) i
 dodatkowo ustawia `PYTHONPATH=src`, więc działa nawet gdy flaga wróci.
 
+## Wiele kamer, trzy tryby pracy
+
+`config.yaml` opisuje `defaults` i liste `cameras`; kazda kamera nadpisuje tylko
+to, czym naprawde sie rozni. Jeden proces obsluguje wszystkie, ze **wspolna baza,
+kolejka uploadu i powiadomieniami** — zdarzenia z roznych kamer musza lezec na
+jednej osi czasu, inaczej warstwa analityczna nie zlaczy ich w jeden obraz.
+
+| Tryb | Dla kogo | Zachowanie |
+| --- | --- | --- |
+| `continuous` | kamera z zasilaniem | strumien otwarty non stop |
+| `on_demand` | kamera na baterii | laczy sie na sygnal, potem pozwala zasnac |
+| `sampling` | statystyki ruchu | obserwuje okno co ustalony czas i ekstrapoluje |
+
+Przyklad z repo: korytarz liczy osoby w `on_demand`, ulica liczy pojazdy
+(`classes: [2,3,5,7]`) w `sampling`, bez nagrywania. Dashboard ma przelacznik
+kamer, a kazdy endpoint przyjmuje `?camera=<slug>`.
+
+**Dlaczego ulica nie moze dzialac na detekcji ruchu.** Wyzwalacz PIR przegapilby
+wiekszosc samochodow i nie wiadomo ktore — liczby nie znaczylyby nic. Probkowanie
+jest uczciwe: wiemy dokladnie, jaka czesc czasu widzielismy, kazde zdarzenie
+niesie mnoznik `1/duty_cycle`, a analityka odtwarza natezenie. Na danych demo
+zapisanych z 1/12 ruchu ekstrapolacja daje 19,6 zdarzen/h przy prawdzie ~19.
+
+Stary jednokamerowy `config.yaml` nadal sie wczytuje — jest zawijany w liste
+jednoelementowa, wiec aktualizacja nie wymaga przepisywania pliku.
+
 ## Kamera na baterii (tryb `on_demand`)
 
 Kamery bateryjne **nie udostępniają RTSP** — ani Reolink, ani Tapo; producenci

@@ -41,6 +41,9 @@ models:
                 values: ["wejscie", "wyjscie"]
 
   - name: stg_minute_stats
+    description: "Agregaty minutowe; ziarno to para (kamera, minuta)."
     columns:
       - name: minute_epoch
-        tests: [unique, not_null]
+        tests: [not_null]
+      - name: camera
+        tests: [not_null]

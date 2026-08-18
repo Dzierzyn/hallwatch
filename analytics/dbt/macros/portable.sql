@@ -71,3 +71,12 @@
     timezone('{{ var("timezone") }}', {{ col }})
   {%- endif -%}
 {%- endmacro %}
+
+{% macro any_true(col) -%}
+  {#- DuckDB ma bool_or, BigQuery uzywa logical_or -#}
+  {%- if target.type == 'bigquery' -%}
+    logical_or({{ col }})
+  {%- else -%}
+    bool_or({{ col }})
+  {%- endif -%}
+{%- endmacro %}

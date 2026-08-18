@@ -9,7 +9,9 @@ with src as (
 
 select
     cast(id as bigint)                              as event_id,
-    coalesce({{ json_get('meta', 'camera') }}, 'nieznana') as camera,
+    -- kamera jest kolumna od wersji wielokamerowej; starsze wiersze maja ja
+    -- tylko w JSON-ie meta, wiec bierzemy pierwsza niepusta wartosc
+    coalesce(nullif(camera, ''), {{ json_get('meta', 'camera') }}, 'nieznana') as camera,
     kind                                            as event_kind,
     {{ epoch_to_ts('started_at') }}                 as started_at,
     {{ to_local(epoch_to_ts('started_at')) }}       as started_at_local,
@@ -21,6 +23,8 @@ select
     cast(count_in as bigint) + cast(count_out as bigint) as crossings_total,
     peak_dbfs,
     clip_path is not null                           as has_clip,
-    cloud_key is not null                           as in_cloud
+    cloud_key is not null                           as in_cloud,
+    coalesce(sampled, 0) = 1                        as is_sampled,
+    coalesce(sample_weight, 1.0)                    as sample_weight
 from src
 where ended_at is not null
