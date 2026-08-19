@@ -86,3 +86,34 @@ def test_per_camera_clip_dirs_do_not_collide():
         {"cameras": [{"name": "a", "source": "0"}, {"name": "b", "source": "1"}]}
     )
     assert cfg.cameras[0].clip_dir != cfg.cameras[1].clip_dir
+
+
+def test_legacy_layout_merges_defaults_too(tmp_path):
+    cfg = _load(
+        tmp_path,
+        """
+        defaults:
+          width: 512
+        camera:
+          name: solo
+          source: "0"
+        """,
+    )
+    assert cfg.cameras[0].width == 512
+
+
+def test_top_level_legacy_key_warns_when_cameras_present(tmp_path, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        cfg = _load(
+            tmp_path,
+            """
+            cameras:
+              - {name: cam, source: "0"}
+            recording:
+              codec: "h264_v4l2m2m"
+            """,
+        )
+    assert cfg.cameras[0].recording.codec == "libx264"  # ignored, as documented...
+    assert any("recording" in r.message for r in caplog.records)  # ...but loudly

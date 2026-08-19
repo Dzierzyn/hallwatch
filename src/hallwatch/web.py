@@ -7,6 +7,7 @@ in the configuration, so that older links keep working.
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
         if not expected:
             return
         supplied = request.cookies.get("hallwatch_token") or request.headers.get("X-Auth-Token")
-        if supplied != expected:
+        if supplied is None or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="authentication required")
 
     guarded = [Depends(require_token)]
@@ -58,8 +59,18 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index(token: str | None = Query(default=None)) -> HTMLResponse:
         response = HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
-        if cfg.web.auth_token and token == cfg.web.auth_token:
-            response.set_cookie("hallwatch_token", cfg.web.auth_token, httponly=True)
+        if (
+            cfg.web.auth_token
+            and token is not None
+            and secrets.compare_digest(token, cfg.web.auth_token)
+        ):
+            # 30 days, so "visit /?token=... once per browser" in the README holds
+            response.set_cookie(
+                "hallwatch_token",
+                cfg.web.auth_token,
+                httponly=True,
+                max_age=30 * 24 * 3600,
+            )
         return response
 
     @app.get("/api/cameras", dependencies=guarded)

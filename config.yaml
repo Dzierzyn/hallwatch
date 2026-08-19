@@ -81,6 +81,7 @@ notify:
   ntfy_topic: ""
 
 web:
-  host: "127.0.0.1" # see docs: never expose the dashboard without auth_token
+  host: "127.0.0.1" # localhost only; see README before changing
   port: 8000
-  # auth_token: "change-me"   # required if you bind to 0.0.0.0
+  # auth_token: "change-me" # strongly recommended when binding beyond localhost
+  #                         # (startup warns, but nothing blocks access without it)

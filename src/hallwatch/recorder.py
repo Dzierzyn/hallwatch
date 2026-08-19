@@ -72,11 +72,10 @@ class ClipWriter:
             codec,
         ]
         if codec == "libx264":
-            # hardware encoders do not accept these flags
-            cmd += ["-preset", "veryfast", "-tune", "zerolatency"]
+            # hardware encoders neither accept these flags nor honour -crf
+            # (they silently ignore it and fall back to a default bitrate)
+            cmd += ["-preset", "veryfast", "-tune", "zerolatency", "-crf", str(crf)]
         cmd += [
-            "-crf",
-            str(crf),
             "-pix_fmt",
             "yuv420p",
             "-movflags",

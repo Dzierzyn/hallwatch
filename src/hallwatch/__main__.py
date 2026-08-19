@@ -95,13 +95,22 @@ def cmd_wake(args: argparse.Namespace, cfg: Config) -> int:
     params = {"source": args.source_name}
     if args.camera:
         params["camera"] = args.camera
+    # The dashboard may be token-protected; we hold the same config, so
+    # authenticate the same way the docs tell webhook clients to.
+    headers = {"X-Auth-Token": cfg.web.auth_token} if cfg.web.auth_token else {}
     try:
-        resp = requests.post(url, params=params, timeout=10)
+        resp = requests.post(url, params=params, headers=headers, timeout=10)
+        if resp.status_code == 401:
+            print(
+                "ERROR: the dashboard requires auth (web.auth_token) and the token was rejected",
+                file=sys.stderr,
+            )
+            return 1
         data = resp.json()
         print(f"{'OK' if data.get('accepted') else 'SKIPPED'}: {data.get('detail')}")
-        return 0
+        return 0 if resp.ok else 1
     except Exception as exc:  # noqa: BLE001
-        print(f"ERROR: cannot connect to {url} ({exc})", file=sys.stderr)
+        print(f"ERROR: could not reach {url} ({exc})", file=sys.stderr)
         print("Is 'hallwatch run' running?", file=sys.stderr)
         return 1
 

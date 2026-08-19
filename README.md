@@ -36,7 +36,7 @@ Windows: `winget install ffmpeg`) · optionally [uv](https://docs.astral.sh/uv/)
 
 ```bash
 git clone https://github.com/Dzierzyn/hallwatch && cd hallwatch
-make install        # or: make install-pip  (no uv needed)
+make install        # or: PYTHON=python3.12 make install-pip  (no uv needed)
 make test           # 30 s, no camera required
 make run            # → http://127.0.0.1:8000
 ```
@@ -179,9 +179,10 @@ does not need it.
 
 | Symptom | Fix |
 | --- | --- |
+| `requires a different Python: 3.14...` during install | Your `python3` is too new for PyTorch. `rm -rf .venv`, then `PYTHON=python3.12 make install-pip` (or use `make install` - uv downloads 3.12 itself) |
 | `ModuleNotFoundError: hallwatch` after install on **macOS + uv** | `make fix-pth` (uv marks `.pth` files hidden; Python ≥3.12 skips hidden `.pth`). Linux/Windows: does not apply. |
 | Webcam opens but frames are black (macOS) | System Settings → Privacy & Security → Camera → allow your terminal |
-| `probe` works but `run` shows nothing (RTSP) | Usually Wi-Fi + UDP; HallWatch forces TCP already - check camera sub-stream and credentials |
+| `probe` works but `run` shows nothing (RTSP) | Usually Wi-Fi + UDP; HallWatch forces RTSP-over-TCP unless you set `OPENCV_FFMPEG_CAPTURE_OPTIONS` yourself - check camera sub-stream and credentials |
 | Recording disabled | Install ffmpeg and restart |
 | Slow on Raspberry Pi / old laptop | Lower `width`, `fps_limit`, `imgsz` - see [docs/cameras.md](docs/cameras.md#low-power-hardware-raspberry-pi-old-laptops) |
 | Windows | Native install works (`make install-pip` or plain `pip install -e .`); use `py -3.12`. WSL2 works for RTSP sources. |

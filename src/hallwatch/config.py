@@ -234,16 +234,28 @@ class Config(BaseModel):
         defaults = data.pop("defaults", {}) or {}
 
         if "cameras" not in data:
-            # old layout: a single camera described by top-level keys
+            # old layout: a single camera described by top-level keys.
+            # `defaults` participates too - dropping it here would silently
+            # ignore the user's settings, the worst kind of config bug.
             legacy = {k: data.pop(k) for k in LEGACY_KEYS if k in data}
             cam = data.pop("camera", {}) or {}
-            merged = _deep_merge(legacy, cam)
+            merged = _deep_merge(_deep_merge(defaults, legacy), cam)
             merged.setdefault("name", cam.get("name", "camera"))
             data["cameras"] = [merged]
         else:
             data["cameras"] = [_deep_merge(defaults, cam) for cam in data["cameras"]]
             for key in LEGACY_KEYS + ("camera",):
-                data.pop(key, None)
+                dropped = data.pop(key, None)
+                if dropped:
+                    # a config that loads cleanly while ignoring settings is a
+                    # trap - tell the user exactly what to move where
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "config: top-level '%s:' is ignored when 'cameras:' is "
+                        "present - nest it under 'defaults:' or under a camera",
+                        key,
+                    )
         return data
 
     @classmethod

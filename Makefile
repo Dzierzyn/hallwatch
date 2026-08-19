@@ -1,4 +1,5 @@
 PY := .venv/bin/python
+PYTHON ?= python3
 
 # Belt and braces: even if the editable install misbehaves (see fix-pth),
 # PYTHONPATH keeps the package importable straight from the repo.
@@ -12,8 +13,11 @@ install:  ## create venv + install (requires uv: https://docs.astral.sh/uv/)
 	$(MAKE) fix-pth
 	@echo "\nDone. Next: make test && make run"
 
+# Needs Python 3.10-3.13. If your system python3 is newer:
+#   PYTHON=python3.12 make install-pip
+# (fix-pth is not needed here - the hidden-.pth bug is uv-specific)
 install-pip:  ## same, but with plain python/pip (no uv needed)
-	python3 -m venv .venv
+	$(PYTHON) -m venv .venv
 	$(PY) -m pip install -e ".[dev]"
 	@echo "\nDone. Next: make test && make run"
 

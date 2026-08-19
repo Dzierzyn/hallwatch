@@ -168,7 +168,7 @@ class FrameSource:
         # libx264 + yuv420p require EVEN dimensions; an odd height (portrait phone
         # cameras) would make ffmpeg die and every clip get deleted as empty.
         width = max(2, self.width - self.width % 2)
-        if frame.shape[1] == width:
+        if frame.shape[1] == width and frame.shape[0] % 2 == 0:
             return frame
         h = int(round(frame.shape[0] * width / frame.shape[1]))
         h = max(2, h - h % 2)  # round DOWN to even

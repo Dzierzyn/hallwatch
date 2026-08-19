@@ -7,6 +7,10 @@
 #   curl -X POST http://127.0.0.1:8000/api/wake        # from a hub automation
 #   hallwatch wake                                      # from a terminal
 #
+# If you set web.auth_token, webhook callers must authenticate:
+#   curl -X POST -H "X-Auth-Token: <token>" http://.../api/wake
+# (`hallwatch wake` reads the token from this config automatically.)
+#
 # The dashboard's "Watch on demand" button holds the session open while you
 # are actually looking, and releases it when you close the tab.
 

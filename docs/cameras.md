@@ -73,10 +73,10 @@ defaults:
   width: 640
   fps_limit: 5
   detection:
-    imgsz: 416        # or 320; halves compute again
+    imgsz: 416 # or 320; halves compute again
     model: "yolo11n.pt"
-recording:
-    codec: "h264_v4l2m2m"   # Raspberry Pi hardware encoder (default: libx264)
+  recording:
+    codec: "h264_v4l2m2m" # Raspberry Pi hardware encoder (default: libx264)
 ```
 
 The MOG2 motion gate matters most here: YOLO runs only when something moves,
