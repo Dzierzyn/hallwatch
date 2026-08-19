@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Ruff (lint + format check)
+        run: |
+          uvx ruff check src tests
+          uvx ruff format --check src tests
+
+  unit-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install (CPU-only, no YOLO weights needed for unit tests)
+        run: |
+          uv venv
+          uv pip install -e . pytest
+      - name: Unit tests
+        run: uv run pytest tests -m "not integration" -q
+
+  integration:
+    # Full pipeline: downloads YOLO weights (~5 MB), needs ffmpeg.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Cache YOLO weights
+        uses: actions/cache@v4
+        with:
+          path: "*.pt"
+          key: yolo11n-v1
+      - name: Install
+        run: |
+          uv venv
+          uv pip install -e . pytest
+      - name: Integration tests
+        run: uv run pytest tests -m integration -q
