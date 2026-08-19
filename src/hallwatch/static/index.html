@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -201,7 +201,7 @@ async function tickState(){
       ['device', s.device],
       ['detection time', s.detect_ms.toFixed(1)+' ms'],
       ['frames total', s.frames_total.toLocaleString('en-GB')],
-      ['tryb', s.mode === 'on_demand' ? 'on_demand (battery)'
+      ['mode', s.mode === 'on_demand' ? 'on_demand (battery)'
               : s.mode === 'sampling' ? `sampling (${(s.duty_cycle*100||0).toFixed(1)}% of time)` : 'continuous'],
       ['sessions', s.mode === 'on_demand' ? s.sessions : '—'],
       ['reconnects', s.reconnects],

@@ -1,0 +1,30 @@
+name: Camera compatibility report
+description: Tell us a camera works (or doesn't) - the most useful contribution there is
+labels: [camera-compat]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Camera model
+      placeholder: "e.g. TP-Link Tapo C210, firmware 1.3.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: works
+    attributes:
+      label: Does it work with HallWatch?
+      options: ["Yes, fully", "Partially (explain below)", "No"]
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Stream URL format (password REDACTED)
+      placeholder: "rtsp://user:REDACTED@192.168.1.x:554/stream1"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Steps needed to enable RTSP, quirks, sub-stream availability, audio presence, `hallwatch probe` output...

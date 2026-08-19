@@ -55,7 +55,9 @@ def draw_line(frame: np.ndarray, counter: PeopleCounter) -> None:
     for p in (p1, p2):
         cv2.circle(frame, p, 4, YELLOW, -1, cv2.LINE_AA)
     labels = counter.cfg.direction_labels
-    text = f"{labels.positive}: {counter.state.positive}  {labels.negative}: {counter.state.negative}"
+    text = (
+        f"{labels.positive}: {counter.state.positive}  {labels.negative}: {counter.state.negative}"
+    )
     cv2.putText(frame, text, (p1[0], max(16, p1[1] - 10)), FONT, 0.5, YELLOW, 1, cv2.LINE_AA)
 
 
@@ -78,7 +80,9 @@ def draw_detections(
         color = _color_for_id(det.track_id)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
         label = names.get(det.cls, str(det.cls))
-        tag = f"#{det.track_id} {label} {det.conf:.2f}" if det.track_id else f"{label} {det.conf:.2f}"
+        tag = (
+            f"#{det.track_id} {label} {det.conf:.2f}" if det.track_id else f"{label} {det.conf:.2f}"
+        )
         (tw, th), _ = cv2.getTextSize(tag, FONT, 0.45, 1)
         cv2.rectangle(frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 8, y1), color, -1)
         cv2.putText(frame, tag, (x1 + 4, max(11, y1 - 5)), FONT, 0.45, (20, 20, 20), 1, cv2.LINE_AA)

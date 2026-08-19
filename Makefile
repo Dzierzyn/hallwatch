@@ -1,48 +1,59 @@
 PY := .venv/bin/python
 
-# Pas i szelki: nawet gdy editable install nie zadziala (patrz fix-pth ponizej),
-# PYTHONPATH sprawia, ze pakiet jest importowalny z repo.
+# Belt and braces: even if the editable install misbehaves (see fix-pth),
+# PYTHONPATH keeps the package importable straight from the repo.
 export PYTHONPATH := src
 
-.PHONY: install fix-pth test run probe scan zones wake prune clean
+.PHONY: install install-pip fix-pth test test-all lint run probe scan zones wake prune clean
 
-install:
+install:  ## create venv + install (requires uv: https://docs.astral.sh/uv/)
 	uv venv --python 3.12
-	uv pip install --python $(PY) -e .
+	uv pip install -e ".[dev]"
 	$(MAKE) fix-pth
-	@echo "\nGotowe. Sprawdz: make test"
+	@echo "\nDone. Next: make test && make run"
 
-# macOS + uv + Python >= 3.12: uv ustawia na plikach .pth flage UF_HIDDEN,
-# a site.py od 3.12 celowo POMIJA ukryte .pth. Efekt: editable install
-# instaluje sie bez bledu, ale 'import hallwatch' nie dziala.
-# Objaw: ModuleNotFoundError mimo 'uv pip install -e .' zakonczonego sukcesem.
+install-pip:  ## same, but with plain python/pip (no uv needed)
+	python3 -m venv .venv
+	$(PY) -m pip install -e ".[dev]"
+	@echo "\nDone. Next: make test && make run"
+
+# macOS + uv + Python >= 3.12 only: uv sets the hidden flag on .pth files and
+# site.py deliberately skips hidden .pth, so editable installs silently fail
+# with ModuleNotFoundError. Harmless everywhere else.
 fix-pth:
-	@chflags nohidden .venv/lib/python3.12/site-packages/*.pth 2>/dev/null || true
-	@ls -lO .venv/lib/python3.12/site-packages/*.pth 2>/dev/null | grep -q hidden \
-		&& echo "UWAGA: pliki .pth nadal ukryte - polegaj na PYTHONPATH=src" \
-		|| echo "pliki .pth widoczne dla site.py"
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		chflags nohidden .venv/lib/python3.*/site-packages/*.pth 2>/dev/null || true; \
+	fi
 
-test:
+test:  ## fast unit tests (no camera, no GPU, no ffmpeg needed)
+	$(PY) -m pytest tests -m "not integration" -q
+
+test-all:  ## + full pipeline on synthetic video (needs ffmpeg, downloads YOLO ~6 MB)
+	$(PY) -m pytest tests -q
 	$(PY) -m hallwatch selftest
 
-run:
+lint:
+	uvx ruff check src tests
+	uvx ruff format --check src tests
+
+run:  ## start the pipeline + dashboard (http://127.0.0.1:8000)
 	$(PY) -m hallwatch run
 
-probe:
-	$(PY) -m hallwatch probe
+probe:  ## test a stream: make probe SOURCE='rtsp://...'
+	$(PY) -m hallwatch probe $(if $(SOURCE),--source '$(SOURCE)')
 
-scan:
+scan:  ## find RTSP cameras on your LAN
 	$(PY) -m hallwatch scan
 
-zones:
+zones:  ## draw counting lines / zones / privacy masks by clicking
 	$(PY) -m hallwatch zones
 
-wake:
+wake:  ## wake an on_demand (battery) camera
 	$(PY) -m hallwatch wake
 
-prune:
+prune:  ## delete recordings older than retention_days
 	$(PY) -m hallwatch prune
 
 clean:
-	rm -rf data/selftest data/ondemand
+	rm -rf data/selftest .pytest_cache .ruff_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

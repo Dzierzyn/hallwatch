@@ -1,0 +1,53 @@
+# Example: two cameras with different jobs sharing one process, one database
+# and one dashboard (switch between them with the tabs in the header).
+#
+#   camera 1  "hallway"  - battery camera counting people, wakes on demand
+#   camera 2  "street"   - window/balcony camera counting vehicles by SAMPLING
+#
+# Why sampling for traffic statistics: motion-triggered counting would miss
+# most vehicles and you would not know which ones - the numbers would mean
+# nothing. Sampling watches a short window at a fixed interval instead; every
+# event carries a 1/duty_cycle weight, so hourly rates can be extrapolated
+# honestly (the analytics layer does this automatically).
+
+defaults:
+  width: 960
+  fps_limit: 15
+
+cameras:
+  - name: "hallway"
+    source: "rtsp://user:password@HUB-IP:554/h264Preview_01_sub"
+    mode: "on_demand"
+    detection:
+      classes: [0] # people
+    counting:
+      line: [[0.08, 0.62], [0.92, 0.62]]
+      direction_labels: { positive: "in", negative: "out" }
+      anchor: "feet"
+
+  - name: "street"
+    source: "rtsp://user:password@CAM-IP:554/stream2"
+    mode: "sampling"
+    sampling:
+      every_minutes: 60 # observe once per hour...
+      seconds: 300 # ...for 5 minutes  (= 8.3% duty cycle)
+      align_to_clock: true # windows start on the hour: samples comparable across days
+    detection:
+      classes: [2, 3, 5, 7] # car, motorcycle, bus, truck
+      conf: 0.30 # top-down views are harder than COCO's side views
+    motion:
+      enabled: false # streets move constantly; the motion gate saves nothing here
+    counting:
+      anchor: "center" # vehicles from above are blobs; the centre is stable
+      line: [[0.05, 0.55], [0.95, 0.55]]
+      direction_labels: { positive: "right", negative: "left" }
+    recording:
+      enabled: false # count vehicles, don't archive the street: stats go to the
+                     # database, video is never written
+
+storage:
+  db: "data/hallwatch.db"
+
+web:
+  host: "127.0.0.1"
+  port: 8000

@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: fct_events
-    description: "Tabela faktow na ziarnie pojedynczego zdarzenia."
+    description: "Fact table at the grain of a single event."
     columns:
       - name: event_id
         tests: [unique, not_null]
@@ -11,8 +11,8 @@ models:
 
   - name: agg_hourly_traffic
     description: >
-      Ziarno: godzina x kamera, w czasie lokalnym, z wypelnionymi zerami dla
-      godzin bez ruchu. Tabela wejsciowa dla modelu prognozujacego.
+      Grain: hour x camera, in local time, with zeros filled in for hours
+      without traffic. Input table for the forecasting model.
     columns:
       - name: hour_ts
         tests: [not_null]
@@ -25,7 +25,7 @@ models:
         tests: [not_null]
 
   - name: mart_traffic_monitor
-    description: "Fakty + prognoza + anomalie w jednym miejscu, pod dashboard i alerty."
+    description: "Facts + forecast + anomalies in one place, for the dashboard and alerts."
     columns:
       - name: hour_ts
         tests: [not_null]

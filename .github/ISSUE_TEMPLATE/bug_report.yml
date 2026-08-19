@@ -1,0 +1,29 @@
+name: Bug report
+description: Something broke
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of the failing command. Run with -v for more detail. REDACT camera passwords from RTSP URLs.
+      render: text
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "e.g. macOS 15 / Python 3.12 / installed via make install"
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera / source
+      placeholder: "e.g. webcam, Tapo C210 via rtsp://.../stream1, IP Webcam app"

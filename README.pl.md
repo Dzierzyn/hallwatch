@@ -1,239 +1,94 @@
 # HallWatch
 
-System computer vision do monitoringu korytarza: detekcja ruchu, wykrywanie
-i **liczenie osób** z trackingiem, detekcja dźwięku, nagrywanie zdarzeń
-z pre-rollem, backup do chmury i dashboard webowy w czasie rzeczywistym.
+**Zamień dowolną kamerę w prywatny, inteligentny monitoring.** Liczenie osób
+i pojazdów, zdarzenia ruchu i dźwięku, nagrania zaczynające się *zanim* coś
+się stało, maski prywatności, dashboard na żywo - wszystko self-hosted, bez
+kont, bez chmury, bez abonamentów.
 
-Zbudowany wokół jednej zasady: **maska prywatności jest pierwszym krokiem
-pipeline'u**, więc obszary, które nie należą do właściciela systemu, nie trafiają
-ani do detekcji, ani na dysk, ani do chmury.
+Działa z: kamerą laptopa · dowolną kamerą RTSP (~100 zł) · starym telefonem
+jako kamerą (**0 zł** - patrz [docs/cameras.md](docs/cameras.md)) · plikami wideo.
 
-```text
-┌────────┐   ┌──────────┐   ┌────────┐   ┌─────────────┐   ┌──────────┐
-│ kamera │──▶│  MASKA   │──▶│ MOG2   │──▶│ YOLO11 +    │──▶│ licznik  │
-│ RTSP   │   │PRYWATNO- │   │ ruch   │   │ ByteTrack   │   │ linii    │
-└────────┘   │  ŚCI     │   │(~1 ms) │   │ (~16 ms/MPS)│   │ i stref  │
-             └──────────┘   └────┬───┘   └─────────────┘   └────┬─────┘
-                                 │ brak ruchu → YOLO śpi        │
-                                 ▼                              ▼
-        ┌────────────────────────────────────────────────────────────┐
-        │  bufor pierścieniowy (pre-roll) → klip H.264 → SQLite      │
-        │  → upload S3 → push ntfy → dashboard MJPEG                 │
-        └────────────────────────────────────────────────────────────┘
-```
+*(English version: [README.md](README.md) - the English README is the
+authoritative one; this translation may lag behind.)*
 
 ## Szybki start
 
-```bash
-make install    # venv + zależności + obejście problemu .pth (patrz niżej)
-
-# 1. sprawdź, czy wszystko działa — bez kamery, na syntetycznym wideo
-make test
-
-# 2. znajdź kamerę w sieci lokalnej
-hallwatch scan
-
-# 3. sprawdź strumień: rozdzielczość, realny FPS, obecność audio
-hallwatch probe --source 'rtsp://user:haslo@192.168.1.50:554/h264Preview_01_main'
-
-# 4. wyznacz klikaniem linię zliczającą, strefy i maski prywatności
-hallwatch zones --source 'rtsp://...'
-
-# 5. uruchom
-hallwatch run          # dashboard: http://127.0.0.1:8000
-```
-
-Nie masz jeszcze kamery? Wszystko działa na wbudowanej kamerze Maca
-(`source: "0"`) albo na pliku `.mp4` — pełny pipeline można rozwijać offline.
-
-### Znany problem: macOS + uv + Python ≥ 3.12
-
-`uv pip install -e .` kończy się sukcesem, a `import hallwatch` mimo to rzuca
-`ModuleNotFoundError`. Przyczyna: uv ustawia na plikach `.pth` macOS-ową flagę
-`UF_HIDDEN`, a `site.py` od Pythona 3.12 **celowo pomija ukryte `.pth`** — więc
-ścieżka z editable install nigdy nie trafia do `sys.path`. Diagnoza:
+**Wymagania:** Python 3.10-3.13 · [ffmpeg](https://ffmpeg.org) w PATH
+(macOS: `brew install ffmpeg` · Debian/Ubuntu: `sudo apt install ffmpeg` ·
+Windows: `winget install ffmpeg`) · opcjonalnie [uv](https://docs.astral.sh/uv/).
 
 ```bash
-ls -lO .venv/lib/python3.12/site-packages/*.pth   # kolumna flag pokaże "hidden"
+git clone https://github.com/Dzierzyn/hallwatch && cd hallwatch
+make install        # albo: make install-pip  (bez uv)
+make test           # 30 s, kamera niepotrzebna
+make run            # → http://127.0.0.1:8000
 ```
 
-`make install` rozwiązuje to dwutorowo: zdejmuje flagę (`make fix-pth`) i
-dodatkowo ustawia `PYTHONPATH=src`, więc działa nawet gdy flaga wróci.
+To wszystko - domyślna konfiguracja patrzy przez **kamerę laptopa** i liczy
+osoby przekraczające linię. Przejdź przez kadr i patrz, jak licznik rośnie.
 
-## Wiele kamer, trzy tryby pracy
+Pierwsze uruchomienie samo pobiera model YOLO11-nano (~6 MB).
 
-`config.yaml` opisuje `defaults` i liste `cameras`; kazda kamera nadpisuje tylko
-to, czym naprawde sie rozni. Jeden proces obsluguje wszystkie, ze **wspolna baza,
-kolejka uploadu i powiadomieniami** — zdarzenia z roznych kamer musza lezec na
-jednej osi czasu, inaczej warstwa analityczna nie zlaczy ich w jeden obraz.
-
-| Tryb | Dla kogo | Zachowanie |
-| --- | --- | --- |
-| `continuous` | kamera z zasilaniem | strumien otwarty non stop |
-| `on_demand` | kamera na baterii | laczy sie na sygnal, potem pozwala zasnac |
-| `sampling` | statystyki ruchu | obserwuje okno co ustalony czas i ekstrapoluje |
-
-Przyklad z repo: korytarz liczy osoby w `on_demand`, ulica liczy pojazdy
-(`classes: [2,3,5,7]`) w `sampling`, bez nagrywania. Dashboard ma przelacznik
-kamer, a kazdy endpoint przyjmuje `?camera=<slug>`.
-
-**Dlaczego ulica nie moze dzialac na detekcji ruchu.** Wyzwalacz PIR przegapilby
-wiekszosc samochodow i nie wiadomo ktore — liczby nie znaczylyby nic. Probkowanie
-jest uczciwe: wiemy dokladnie, jaka czesc czasu widzielismy, kazde zdarzenie
-niesie mnoznik `1/duty_cycle`, a analityka odtwarza natezenie. Na danych demo
-zapisanych z 1/12 ruchu ekstrapolacja daje 19,6 zdarzen/h przy prawdzie ~19.
-
-Stary jednokamerowy `config.yaml` nadal sie wczytuje — jest zawijany w liste
-jednoelementowa, wiec aktualizacja nie wymaga przepisywania pliku.
-
-## Kamera na baterii (tryb `on_demand`)
-
-Kamery bateryjne **nie udostępniają RTSP** — ani Reolink, ani Tapo; producenci
-blokują to wprost z powodu zużycia energii. Wyjątkiem jest Reolink z **Home
-Hubem**, który wystawia RTSP w imieniu kamery, bez abonamentu.
-
-Zostaje jednak fizyka: utrzymywanie otwartego strumienia nie pozwala kamerze
-zasnąć i zjada akumulator w kilka dni. Dlatego `camera.mode: on_demand` nie
-trzyma połączenia — czeka na sygnał, łapie krótką sesję i rozłącza się, by
-kamera wróciła do snu:
+### Docker (najlepszy dla kamer RTSP)
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/wake    # webhook: hub, Home Assistant, cokolwiek
-make wake                                       # albo z terminala
+# w config.yaml ustaw source: "rtsp://user:haslo@IP-KAMERY:554/stream1"
+docker compose up   # → http://localhost:8000
 ```
 
-Sesja kończy się po `session_idle_s` ciszy lub po `session_seconds` twardego
-limitu. `active_hours` (np. `"07:00-23:00"`) pozwala ignorować sygnały nocą.
+### Masz prawdziwą kamerę?
 
-**Podgląd live nie znika w tym trybie** — jest dostępny w każdej sesji, a przycisk
-„Podgląd na żądanie" w dashboardzie budzi kamerę i trzyma sesję otwartą, dopóki
-patrzysz, nawet gdy w kadrze nic się nie rusza. Przeglądarka wysyła puls
-`POST /api/watch` co 10 s; ukrycie karty przestaje go wysyłać, więc kamera
-zasypia sama. `watch_max_s` jest bezpiecznikiem na zapomnianą zakładkę —
-inaczej jedno otwarte okno rozładowałoby akumulator.
-Model tła MOG2 jest budowany od nowa na każdą sesję ze skróconym warmupem — po
-przerwie stary model jest bezużyteczny, a o zdarzeniu i tak wiemy z sygnału.
+```bash
+make scan                                   # znajdź kamery RTSP w sieci
+make probe SOURCE='rtsp://user:haslo@ip:554/stream1'   # sprawdź strumień
+make zones                                  # narysuj linie zliczające klikaniem
+```
+
+Wpisz URL do `config.yaml` pod `source:` i ponownie `make run`.
+**Nie masz kamery?** Stary telefon działa świetnie i nic nie kosztuje -
+[docs/cameras.md](docs/cameras.md) opisuje to oraz które tanie kamery kupić
+(i których unikać - kamery bateryjne przeczytaj *przed* zakupem).
 
 ## Co robi
 
-| Funkcja | Realizacja |
-| --- | --- |
-| Detekcja ruchu | odejmowanie tła MOG2 na obrazie 1/2, próg na ułamek powierzchni kadru |
-| Detekcja osób | YOLO11 (Ultralytics), akceleracja Apple MPS / CUDA / CPU |
-| Tracking | ByteTrack — trwałe `track_id` między klatkami |
-| Liczenie przejść | zmiana znaku iloczynu wektorowego względem odcinka + kontrola, czy przecięcie leży w jego obrębie |
-| Obecność w strefach | test punkt-w-wielokącie dla kotwicy (`feet` / `center`) |
-| Detekcja dźwięku | osobny proces `ffmpeg -vn` → PCM → dBFS z histerezą |
-| Nagrywanie | bufor pierścieniowy pre-roll → pipe do `ffmpeg` → H.264 mp4 |
-| Zdarzenia | SQLite (WAL): zdarzenia, przejścia, agregaty minutowe |
-| Chmura | dowolny storage S3-compatible: Cloudflare R2, Backblaze B2, MinIO, AWS |
-| Powiadomienia | ntfy.sh z miniaturą zdarzenia, z throttlingiem |
-| Dashboard | FastAPI + MJPEG, licznik live, timeline zdarzeń z odtwarzaczem klipów |
-| Retencja | `hallwatch prune` usuwa media starsze niż `retention_days` |
+Detekcja ruchu (bramka MOG2 ~1 ms przed siecią) · detekcja i tracking osób
+lub pojazdów (YOLO11 + ByteTrack) · liczenie przekroczeń linii z kierunkiem ·
+strefy obecności · zdarzenia dźwiękowe · nagrywanie z pre-rollem · maski
+prywatności nakładane **przed** detekcją i zapisem · SQLite · dashboard MJPEG
+z osią zdarzeń · powiadomienia ntfy · opcjonalny backup S3 · opcjonalna
+[warstwa analityczna](analytics/) (dbt + prognoza ruchu + anomalie).
 
-## Decyzje projektowe
+Trzy tryby pracy kamery: `continuous` (zasilanie stałe), `on_demand`
+(kamery bateryjne - łączy się na sygnał i pozwala kamerze zasnąć),
+`sampling` (statystyki ruchu z uczciwą ekstrapolacją z próbki).
 
-**MOG2 jako bramka przed YOLO.** Korytarz jest pusty przez większość doby.
-Uruchamianie sieci neuronowej 15 razy na sekundę przez 24 h to marnowanie prądu
-bez zysku informacyjnego. MOG2 kosztuje ~1 ms i decyduje, kiedy wybudzić
-detektor na `detection.awake_seconds`. W praktyce YOLO pracuje kilka procent
-czasu.
+## Prywatność w konstrukcji
 
-**Kotwica zależna od kąta montażu** (`counting.anchor`). O przekroczeniu linii
-decyduje jeden punkt sylwetki — i jego wybór zależy od tego, skąd patrzy kamera.
-Przy ujęciu z boku lub skosem w dół korytarza właściwe są **stopy** (`feet`):
-trzymają się podłogi, a to podłoga przecina linię; środek boxa skakałby, gdy
-ktoś podnosi rękę albo częściowo wychodzi z kadru. Przy kamerze pod sufitem
-patrzącej **prosto w dół** stóp nie ma — sylwetka jest plamą, której dolna
-krawędź zmienia się z każdym krokiem — więc jedynym stabilnym punktem jest
-**środek** (`center`). Oba tryby mają regresję na dokładnie jedno przejście.
+- Maski są **pierwszym** krokiem pipeline'u: zamaskowany obszar nigdy nie
+  trafia do detekcji, na dysk, do dashboardu ani do chmury.
+- Zero rozpoznawania twarzy i tożsamości; identyfikatory śledzenia żyją tylko
+  w pamięci procesu.
+- Dane lokalnie domyślnie; chmura to opt-in do Twojego własnego bucketa.
+- Ograniczona retencja: `make prune`.
 
-Widok z góry ma jeszcze jeden skutek: COCO uczono głównie na ujęciach z boku,
-więc pewność detekcji spada. Zapas jest w `detection.conf` (0.25–0.30) i w
-mocniejszym modelu `yolo11s.pt`.
+Jeśli kamera widzi drzwi lub okno sąsiada: najpierw przestaw kadr, resztę
+zamaskuj, powieś informację o monitoringu i sprawdź lokalne prawo - w UE
+nagrywanie przestrzeni wspólnej zwykle uruchamia obowiązki RODO.
 
-**Kontrola odcinka, nie prostej.** Sam znak iloczynu wektorowego wykrywa
-przecięcie *nieskończonej prostej*, więc ktoś idący daleko poza linią zostałby
-zliczony. Rzut punktu na odcinek (parametr `t` w `[0,1]`) eliminuje ten błąd —
-regresja na to jest w `selftest` (krok 4/4 wymaga dokładnie jednego przejścia).
+## Dashboard z innych urządzeń
 
-**Pre-roll przez bufor pierścieniowy.** Gdy system stwierdzi zdarzenie, jego
-początek jest już przeszłością. Każda klatka ląduje najpierw w `deque`
-o długości `pre_roll_s`, a decyzja o nagraniu wylewa bufor do pliku. Na klipie
-widać, jak ktoś wchodzi — nie doklejkę od połowy.
+Dashboard domyślnie **nie ma uwierzytelnienia** i słucha na `127.0.0.1`.
+Żeby wejść z telefonu, ustaw w `config.yaml` **obie** rzeczy: `host: "0.0.0.0"`
+oraz `auth_token: "cos-dlugiego-i-losowego"`, potem otwórz
+`http://<ip>:8000/?token=<twoj-token>`. Do dostępu spoza domu użyj
+Tailscale/WireGuard, nie przekierowania portów.
 
-**Wątek czytający zawsze najnowszą klatkę.** Przy RTSP wolniejszy konsument
-powoduje zaleganie klatek w buforze i narastające opóźnienie. Dla źródeł live
-wątek nadpisuje najnowszą klatkę i porzuca stare; dla plików czyta sekwencyjnie,
-żeby nic nie zgubić.
+## Współtworzenie
 
-**`ffmpeg` przez pipe zamiast `cv2.VideoWriter`.** Daje H.264 z `+faststart`,
-odtwarzalny w przeglądarce bez transkodowania, i niezależność od kodeków
-skompilowanych w OpenCV.
+Najcenniejszy wkład to **raport zgodności kamery** - jest do tego szablon
+issue, kod niepotrzebny. Setup deweloperski: [CONTRIBUTING.md](CONTRIBUTING.md).
+Zgłoszenia bezpieczeństwa: [SECURITY.md](SECURITY.md).
 
-## Konfiguracja
+## Licencja
 
-Wszystko w [config.yaml](config.yaml). Współrzędne linii, stref i masek są
-**znormalizowane do 0..1**, więc przeżywają zmianę rozdzielczości kamery.
-
-Chmura — klucze przez zmienne środowiskowe, nie w pliku:
-
-```bash
-export HALLWATCH_S3_KEY=...
-export HALLWATCH_S3_SECRET=...
-```
-
-## Prywatność i RODO
-
-Najlepszym zabezpieczeniem jest **kadr**, nie software: kamera ustawiona tak, by
-widziała wyłącznie własne drzwi, nie wymaga żadnego maskowania. To jest domyślne
-założenie tego systemu — `privacy.masks` jest puste, a przy pustej liście
-`PrivacyMasker.apply()` natychmiast zwraca klatkę bez zmian i zerowego narzutu.
-
-Gdy jednak kadru nie da się tak ograniczyć (montaż wymuszony konstrukcją,
-szerokokątny obiektyw łapiący cudze wejście), są narzędzia:
-
-- `privacy.masks` — obszary zasłaniane **przed** detekcją, nagraniem i uploadem;
-  detekcje z kotwicą w masce są odrzucane. `hallwatch zones` wyznacza je myszką
-- `recording.retention_days` + `hallwatch prune` — ograniczona retencja
-- brak rozpoznawania twarzy i identyfikacji osób: system liczy anonimowe
-  obiekty klasy `person`, `track_id` żyje tylko w pamięci procesu
-- lokalny zapis domyślnie, chmura opcjonalnie i prywatnym bucketem
-
-Warto też mieć widoczną informację o monitoringu — jest tania, a rozwiązuje
-większość nieporozumień, zanim powstaną.
-
-## Struktura
-
-```text
-src/hallwatch/
-  capture.py    odczyt RTSP/webcam/plik + reconnect
-  privacy.py    maski prywatności (blur / black / pixelate)
-  motion.py     bramka MOG2
-  detect.py     YOLO11 + ByteTrack
-  counter.py    przekroczenia linii, obecność w strefach
-  recorder.py   bufor pierścieniowy + ffmpeg H.264
-  store.py      SQLite: zdarzenia, przejścia, statystyki
-  audio.py      poziom dźwięku z RTSP przez ffmpeg
-  cloud.py      upload S3-compatible w tle
-  notify.py     push ntfy
-  draw.py       nakładka: boxy, trajektorie, HUD
-  pipeline.py   maszyna stanów IDLE → AWAKE → EVENT
-  web.py        FastAPI: dashboard, MJPEG, API
-  tools.py      scan / probe / edytor stref / selftest
-```
-
-## Warstwa analityczna
-
-Zdarzenia z kamer sa zrodlem dla osobnego pipeline'u danych w
-[analytics/](analytics/README.md): przyrostowy extract do Parquet, BigQuery
-przez tabele zewnetrzne nad GCS, modelowanie w dbt (9 modeli, 23 testy),
-prognoza ruchu na 24 h i wykrywanie anomalii, orkiestrowane Airflowem.
-Caly stos da sie uruchomic lokalnie na DuckDB, bez konta w chmurze.
-
-## Dalsze kroki
-
-- ReID między zdarzeniami (ta sama osoba wróciła po godzinie?)
-- klasyfikacja dźwięku YAMNet: pukanie / trzaśnięcie drzwiami / krzyk
-- Docker + `systemd` na Raspberry Pi 5 lub mini-PC, żeby MacBook nie chodził 24/7
-- eksport metryk do Prometheusa, alerty na anomalie w nocy
+[MIT](LICENSE).

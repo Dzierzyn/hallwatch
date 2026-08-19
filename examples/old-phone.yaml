@@ -1,0 +1,23 @@
+# Example: an old Android phone as a camera - the cheapest way to try HallWatch
+# with real hardware (total cost: 0).
+#
+# 1. Install "IP Webcam" (free) on the phone.
+# 2. Start the server in the app; it shows a URL like http://192.168.1.23:8080
+# 3. Point `source` at <that URL>/video
+# 4. Plug the phone into a charger and wedge it somewhere useful.
+#
+# Apps that serve RTSP directly (e.g. "RTSP Camera Server") work the same way
+# with an rtsp:// URL.
+
+cameras:
+  - name: "phone"
+    source: "http://192.168.1.23:8080/video"
+    mode: "continuous"
+    detection:
+      classes: [0]
+    counting:
+      line: [[0.1, 0.55], [0.9, 0.55]]
+      direction_labels: { positive: "in", negative: "out" }
+
+storage:
+  db: "data/hallwatch.db"

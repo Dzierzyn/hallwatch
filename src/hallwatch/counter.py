@@ -25,7 +25,7 @@ from .privacy import denormalize
 class Crossing:
     track_id: int
     ts: float
-    direction: str  # etykieta z configu, np. "wejscie"
+    direction: str  # label from config, e.g. "in"
     sign: int  # +1 / -1
 
 
@@ -51,7 +51,7 @@ class PeopleCounter:
         self._zone_cache: dict[tuple[int, int], list[tuple[str, np.ndarray]]] = {}
         self._line_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
 
-    # -- geometria ----------------------------------------------------------
+    # -- geometry -------------------------------------------------------------
     def line_px(self, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray] | None:
         if self.cfg.line is None:
             return None
@@ -82,7 +82,7 @@ class PeopleCounter:
         t = ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / denom
         return -0.05 <= t <= 1.05
 
-    # -- aktualizacja -------------------------------------------------------
+    # -- update ---------------------------------------------------------------
     def update(
         self, detections: list[Detection], shape: tuple[int, int], ts: float | None = None
     ) -> list[Crossing]:
@@ -102,7 +102,10 @@ class PeopleCounter:
             self.trails[tid].append((int(anchor[0]), int(anchor[1])))
 
             for name, poly in zones:
-                if len(poly) >= 3 and cv2.pointPolygonTest(poly, (float(anchor[0]), float(anchor[1])), False) >= 0:
+                if (
+                    len(poly) >= 3
+                    and cv2.pointPolygonTest(poly, (float(anchor[0]), float(anchor[1])), False) >= 0
+                ):
                     zone_counts[name] += 1
 
             if line is None:
@@ -111,18 +114,18 @@ class PeopleCounter:
             raw = self._side(a, b, anchor)
             side = 0 if abs(raw) < 1e-9 else (1 if raw > 0 else -1)
             prev = self._sides.get(tid)
-            if prev is not None and side != 0 and prev != 0 and side != prev:
-                if self._within_segment(a, b, anchor):
-                    label = (
-                        self.cfg.direction_labels.positive
-                        if side > 0
-                        else self.cfg.direction_labels.negative
-                    )
-                    if side > 0:
-                        self.state.positive += 1
-                    else:
-                        self.state.negative += 1
-                    crossings.append(Crossing(track_id=tid, ts=ts, direction=label, sign=side))
+            flipped = prev is not None and side != 0 and prev != 0 and side != prev
+            if flipped and self._within_segment(a, b, anchor):
+                label = (
+                    self.cfg.direction_labels.positive
+                    if side > 0
+                    else self.cfg.direction_labels.negative
+                )
+                if side > 0:
+                    self.state.positive += 1
+                else:
+                    self.state.negative += 1
+                crossings.append(Crossing(track_id=tid, ts=ts, direction=label, sign=side))
             if side != 0:
                 self._sides[tid] = side
 

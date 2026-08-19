@@ -25,7 +25,7 @@ DEFAULT_ARGS = {
 @dag(
     dag_id="hallwatch_elt",
     description="Camera events -> BigQuery -> dbt -> forecast and anomalies",
-    schedule="15 * * * *",  # kwadrans po kazdej pelnej godzinie
+    schedule="15 * * * *",  # a quarter past every full hour
     start_date=pendulum.datetime(2026, 1, 1, tz="Europe/Warsaw"),
     catchup=False,
     max_active_runs=1,  # watermark-based increments do not tolerate parallelism
@@ -61,7 +61,7 @@ def hallwatch_elt():
 
     @task
     def dbt_post_ml(ml_result: dict) -> str:
-        """Marty laczace fakty z prognoza i anomaliami."""
+        """Marts joining facts with the forecast and anomalies."""
         from hallwatch_elt.cli import task_dbt
 
         task_dbt("build", "--select", "tag:post_ml")
@@ -70,10 +70,10 @@ def hallwatch_elt():
     @task
     def report(ml_result: dict, dbt_status: str) -> str:
         """A short summary for the log, visible in the UI without digging into the data."""
-        lines = [f"anomalie w oknie: {ml_result.get('anomalies', 0)}"]
+        lines = [f"anomalies in window: {ml_result.get('anomalies', 0)}"]
         for m in ml_result.get("metrics", []):
             lines.append(
-                f"{m['camera']}: MAE {m['mae_model']:.3f} vs naiwna "
+                f"{m['camera']}: MAE {m['mae_model']:.3f} vs naive "
                 f"{m['mae_baseline']:.3f} ({m['improvement_pct']:+.1f}%)"
             )
         summary = " | ".join(lines)

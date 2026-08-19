@@ -10,7 +10,7 @@ import logging
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -31,6 +31,24 @@ STATIC = Path(__file__).parent / "static"
 def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
     app = FastAPI(title="HallWatch", docs_url="/api/docs", redoc_url=None)
 
+    if not cfg.web.auth_token and cfg.web.host not in ("127.0.0.1", "localhost", "::1"):
+        log.warning(
+            "Dashboard bound to %s with no auth_token - anyone on the network "
+            "can view streams and clips",
+            cfg.web.host,
+        )
+
+    def require_token(request: Request) -> None:
+        """No-op when web.auth_token is empty; otherwise cookie or header must match."""
+        expected = cfg.web.auth_token
+        if not expected:
+            return
+        supplied = request.cookies.get("hallwatch_token") or request.headers.get("X-Auth-Token")
+        if supplied != expected:
+            raise HTTPException(status_code=401, detail="authentication required")
+
+    guarded = [Depends(require_token)]
+
     def pick(camera: str | None):
         try:
             return manager.get(camera or None)
@@ -38,33 +56,38 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"no such camera '{camera}'") from None
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
+    def index(token: str | None = Query(default=None)) -> HTMLResponse:
+        response = HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
+        if cfg.web.auth_token and token == cfg.web.auth_token:
+            response.set_cookie("hallwatch_token", cfg.web.auth_token, httponly=True)
+        return response
 
-    @app.get("/api/cameras")
+    @app.get("/api/cameras", dependencies=guarded)
     def api_cameras() -> JSONResponse:
         """The camera list, from which the dashboard builds its switch."""
-        return JSONResponse([
-            {
-                "slug": p.prof.slug,
-                "name": p.prof.name,
-                "mode": p.prof.mode,
-                "classes": p.prof.detection.classes,
-                "recording": p.prof.recording.enabled,
-                "sampling": (
-                    {
-                        "every_minutes": p.prof.sampling.every_minutes,
-                        "seconds": p.prof.sampling.seconds,
-                        "duty_cycle": round(p.prof.sampling.duty_cycle, 4),
-                    }
-                    if p.prof.mode == "sampling"
-                    else None
-                ),
-            }
-            for p in manager.pipelines.values()
-        ])
+        return JSONResponse(
+            [
+                {
+                    "slug": p.prof.slug,
+                    "name": p.prof.name,
+                    "mode": p.prof.mode,
+                    "classes": p.prof.detection.classes,
+                    "recording": p.prof.recording.enabled,
+                    "sampling": (
+                        {
+                            "every_minutes": p.prof.sampling.every_minutes,
+                            "seconds": p.prof.sampling.seconds,
+                            "duty_cycle": round(p.prof.sampling.duty_cycle, 4),
+                        }
+                        if p.prof.mode == "sampling"
+                        else None
+                    ),
+                }
+                for p in manager.pipelines.values()
+            ]
+        )
 
-    @app.get("/stream.mjpg")
+    @app.get("/stream.mjpg", dependencies=guarded)
     def stream(camera: str | None = Query(default=None)) -> StreamingResponse:
         """MJPEG: successive JPEG frames in a single multipart response."""
         pipeline = pick(camera)
@@ -89,7 +112,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
             headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"},
         )
 
-    @app.get("/api/state")
+    @app.get("/api/state", dependencies=guarded)
     def api_state(camera: str | None = Query(default=None)) -> JSONResponse:
         pipeline = pick(camera)
         prof = pipeline.prof
@@ -107,7 +130,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
             data["duty_cycle"] = round(prof.sampling.duty_cycle, 4)
         return JSONResponse(data)
 
-    @app.get("/api/events")
+    @app.get("/api/events", dependencies=guarded)
     def api_events(
         limit: int = 50, kind: str | None = None, camera: str | None = Query(default=None)
     ) -> JSONResponse:
@@ -115,28 +138,30 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
         if camera:
             name = pick(camera).prof.name
         events = manager.store.recent_events(limit=min(limit, 500), kind=kind, camera=name)
-        return JSONResponse([
-            {
-                "id": e.id,
-                "camera": e.camera,
-                "kind": e.kind,
-                "started_at": e.started_at,
-                "ended_at": e.ended_at,
-                "duration_s": (e.ended_at - e.started_at) if e.ended_at else None,
-                "max_persons": e.max_persons,
-                "count_in": e.count_in,
-                "count_out": e.count_out,
-                "peak_dbfs": e.peak_dbfs,
-                "sampled": bool(e.sampled),
-                "sample_weight": e.sample_weight,
-                "clip": f"/media/{e.clip_path}" if e.clip_path else None,
-                "snapshot": f"/media/{e.snapshot_path}" if e.snapshot_path else None,
-                "cloud": bool(e.cloud_key),
-            }
-            for e in events
-        ])
+        return JSONResponse(
+            [
+                {
+                    "id": e.id,
+                    "camera": e.camera,
+                    "kind": e.kind,
+                    "started_at": e.started_at,
+                    "ended_at": e.ended_at,
+                    "duration_s": (e.ended_at - e.started_at) if e.ended_at else None,
+                    "max_persons": e.max_persons,
+                    "count_in": e.count_in,
+                    "count_out": e.count_out,
+                    "peak_dbfs": e.peak_dbfs,
+                    "sampled": bool(e.sampled),
+                    "sample_weight": e.sample_weight,
+                    "clip": f"/media/{e.clip_path}" if e.clip_path else None,
+                    "snapshot": f"/media/{e.snapshot_path}" if e.snapshot_path else None,
+                    "cloud": bool(e.cloud_key),
+                }
+                for e in events
+            ]
+        )
 
-    @app.post("/api/wake")
+    @app.post("/api/wake", dependencies=guarded)
     def wake(source: str = "api", camera: str | None = Query(default=None)) -> JSONResponse:
         """Wake signal for on_demand mode (battery camera)."""
         pipeline = pick(camera)
@@ -149,41 +174,41 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
                 "detail": (
                     "a session will be opened"
                     if accepted
-                    else f"tryb {pipeline.prof.mode} - wybudzanie zbedne"
+                    else f"mode {pipeline.prof.mode} - wake-up not needed"
                 ),
             },
             status_code=202 if accepted else 200,
         )
 
-    @app.post("/api/watch")
+    @app.post("/api/watch", dependencies=guarded)
     def watch(camera: str | None = Query(default=None)) -> JSONResponse:
         """The 'I am watching' heartbeat from the dashboard, holding the session open."""
         return JSONResponse(pick(camera).hold_session())
 
-    @app.get("/api/stats")
+    @app.get("/api/stats", dependencies=guarded)
     def api_stats(minutes: int = 180) -> JSONResponse:
         since = time.time() - minutes * 60
         return JSONResponse(
             {"minutes": manager.store.stats_since(since), "totals": manager.store.totals(since)}
         )
 
-    @app.get("/media/{path:path}")
+    @app.get("/media/{path:path}", dependencies=guarded)
     def media(path: str) -> FileResponse:
-        """Serwuje klipy i miniatury, blokujac wyjscie poza katalogi nagran."""
+        """Serves clips and thumbnails, refusing paths outside the recording directories."""
         allowed = [cfg.path(cam.recording.dir).resolve() for cam in cfg.cameras]
         target = (cfg.root / path).resolve()
-        if not any(str(target).startswith(str(base)) for base in allowed) or not target.is_file():
+        if not any(target.is_relative_to(base) for base in allowed) or not target.is_file():
             raise HTTPException(status_code=404, detail="not found")
         return FileResponse(target)
 
-    @app.get("/api/events/{event_id}/cloud")
+    @app.get("/api/events/{event_id}/cloud", dependencies=guarded)
     def cloud_link(event_id: int) -> RedirectResponse:
         event = manager.store.event(event_id)
         if event is None or not event.cloud_key:
             raise HTTPException(status_code=404, detail="no cloud copy")
         url = manager.uploader.presigned_url(event.cloud_key)
         if not url:
-            raise HTTPException(status_code=503, detail="nie udalo sie podpisac URL")
+            raise HTTPException(status_code=503, detail="could not presign the URL")
         return RedirectResponse(url)
 
     @app.get("/healthz")
@@ -198,8 +223,11 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
             ok = live_ok and s.last_error is None
             healthy &= ok
             cams[slug] = {
-                "ok": ok, "frames": s.frames_total, "fps": round(s.fps, 2),
-                "mode": pipe.prof.mode, "session_active": s.session_active,
+                "ok": ok,
+                "frames": s.frames_total,
+                "fps": round(s.fps, 2),
+                "mode": pipe.prof.mode,
+                "session_active": s.session_active,
                 "error": s.last_error,
             }
         return JSONResponse({"ok": healthy, "cameras": cams}, status_code=200 if healthy else 503)

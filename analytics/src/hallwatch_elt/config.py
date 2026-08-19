@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # analytics/
-REPO = ROOT.parent  # katalog projektu hallwatch
+REPO = ROOT.parent  # the hallwatch project directory
 
 
 def _env(name: str, default: str = "") -> str:
@@ -31,7 +31,7 @@ class Settings:
     state_dir: Path = field(
         default_factory=lambda: Path(_env("HW_STATE_DIR") or ROOT / ".state")
     )
-    # dev = DuckDB lokalnie, prod = BigQuery
+    # dev = DuckDB locally, prod = BigQuery
     target: str = field(default_factory=lambda: _env("HW_TARGET", "dev") or "dev")
     duckdb_path: Path = field(
         default_factory=lambda: Path(_env("HW_DUCKDB") or ROOT / "data" / "warehouse.duckdb")
@@ -43,7 +43,7 @@ class Settings:
     gcs_bucket: str = field(default_factory=lambda: _env("HW_GCS_BUCKET"))
 
     def __post_init__(self) -> None:
-        # Sciezki MUSZA byc bezwzgledne: dbt uruchamiamy z podkatalogu dbt/,
+        # Paths MUST be absolute: dbt is run from the dbt/ subdirectory,
         # so every relative path would drift depending on
         # who happens to invoke the step. That kind of bug is silent and misleading.
         for field_name in ("source_db", "raw_dir", "state_dir", "duckdb_path"):

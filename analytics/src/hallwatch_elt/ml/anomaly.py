@@ -72,7 +72,7 @@ def run(predictions: pd.DataFrame, hourly: pd.DataFrame) -> pd.DataFrame:
                 merged["residual_flag"],
                 merged["iso_flag"],
             ],
-            ["reszta+izolacja", "nietypowe natezenie", "nietypowa kombinacja cech"],
+            ["residual+isolation", "unusual volume", "unusual feature combination"],
             default="",
         )
         frames.append(
@@ -87,7 +87,7 @@ def run(predictions: pd.DataFrame, hourly: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
     log.info(
-        "Anomalie: %d z %d godzin (%.2f%%)",
+        "Anomalies: %d of %d hours (%.2f%%)",
         int(out["is_anomaly"].sum()), len(out), 100 * out["is_anomaly"].mean(),
     )
     return out

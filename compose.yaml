@@ -1,0 +1,16 @@
+services:
+  hallwatch:
+    build: .
+    # Publish on localhost only. To reach the dashboard from other devices,
+    # change to "8000:8000" AND set web.auth_token in config.yaml first -
+    # the dashboard has no other authentication.
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    environment:
+      # Optional S3 backup credentials (see config.yaml `cloud`)
+      HALLWATCH_S3_KEY: ${HALLWATCH_S3_KEY:-}
+      HALLWATCH_S3_SECRET: ${HALLWATCH_S3_SECRET:-}
+    restart: unless-stopped

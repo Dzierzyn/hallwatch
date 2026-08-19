@@ -37,9 +37,9 @@ class Metrics:
     improvement_pct: float
 
     def line(self) -> str:
-        verdict = "lepszy" if self.improvement_pct > 0 else "GORSZY"
+        verdict = "better" if self.improvement_pct > 0 else "WORSE"
         return (
-            f"  {self.camera:10s} MAE {self.mae_model:6.3f} vs naiwna {self.mae_baseline:6.3f}"
+            f"  {self.camera:10s} MAE {self.mae_model:6.3f} vs naive {self.mae_baseline:6.3f}"
             f"  -> {self.improvement_pct:+5.1f}% ({verdict}), train={self.n_train} test={self.n_test}"
         )
 
@@ -61,7 +61,7 @@ def _fit_one(hist: pd.DataFrame, camera: str) -> tuple[Metrics, pd.DataFrame]:
     model.fit(train[cols], train[F.TARGET])
 
     pred = np.clip(model.predict(test[cols]), 0, None)
-    baseline = test["lag_168"].to_numpy()  # ta sama godzina tydzien temu
+    baseline = test["lag_168"].to_numpy()  # the same hour a week ago
 
     mae_m = mean_absolute_error(test[F.TARGET], pred)
     mae_b = mean_absolute_error(test[F.TARGET], baseline)
@@ -109,7 +109,7 @@ def _fit_one(hist: pd.DataFrame, camera: str) -> tuple[Metrics, pd.DataFrame]:
 
 
 def run(hourly: pd.DataFrame) -> tuple[pd.DataFrame, list[Metrics]]:
-    """Trenuje osobny model na kamere i zwraca (predykcje, metryki)."""
+    """Trains a separate model per camera and returns (predictions, metrics)."""
     frames, all_metrics = [], []
     for camera, group in hourly.groupby("camera"):
         hist = (

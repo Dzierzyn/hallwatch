@@ -1,7 +1,7 @@
 [project]
 name = "hallwatch-elt"
 version = "0.1.0"
-description = "ELT + ML nad zdarzeniami z pipeline'u computer vision HallWatch"
+description = "ELT + ML over events from the HallWatch computer-vision pipeline"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "pandas>=2.2",

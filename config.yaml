@@ -1,151 +1,86 @@
 # ---------------------------------------------------------------------------
-# HallWatch - multi-camera configuration
+# HallWatch configuration
 #
-# `defaults` describes shared behaviour, `cameras` the list of cameras. Each one
-# overrides only what genuinely differs. Line, zone and mask coordinates are
-# NORMALISED to 0..1, so they survive a change of resolution.
-# Define them by clicking:  hallwatch zones --camera corridor
+# This default works OUT OF THE BOX with a laptop webcam: one camera, always
+# on, counting people. Point `source` at an RTSP URL when you have a real
+# camera. More elaborate setups (multiple cameras, battery cameras, vehicle
+# counting) live in examples/ - copy what you need.
+#
+# Line, zone and mask coordinates are NORMALISED to 0..1, so they survive a
+# change of resolution. Draw them by clicking:  hallwatch zones
 # ---------------------------------------------------------------------------
 
+cameras:
+  - name: "camera"
+    # What to watch. Accepts:
+    #   "0"                          laptop / USB webcam (a number = device index)
+    #   "rtsp://user:password@ip:554/stream1"   any RTSP camera
+    #   "http://phone-ip:8080/video" an old phone running the IP Webcam app
+    #   "path/to/video.mp4"          a file, great for testing
+    source: "0"
+    mode: "continuous" # continuous | on_demand (battery cams) | sampling (traffic stats)
+
+    detection:
+      classes: [0] # COCO ids: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck
+
+    counting:
+      # People crossing this line are counted with direction. Adjust to your
+      # scene with `hallwatch zones`, or delete `line` to disable counting.
+      line: [[0.08, 0.62], [0.92, 0.62]]
+      direction_labels:
+        positive: "in"
+        negative: "out"
+      # anchor: which point of the person decides a crossing.
+      #   feet   - camera looks along a corridor / at an angle (default)
+      #   center - camera looks straight down from the ceiling
+      anchor: "feet"
+
+    privacy:
+      # Areas blurred BEFORE detection, recording and upload - nothing from a
+      # masked region ever reaches disk. Draw masks with `hallwatch zones`.
+      # masks:
+      #   - name: "neighbours-window"
+      #     polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
+      #     mode: "blur" # blur | black | pixelate
+      masks: []
+
+# --- shared settings --------------------------------------------------------
+
 defaults:
-  width: 960
-  fps_limit: 15
-  reconnect_delay_s: 3.0
-  mode: "continuous" # continuous | on_demand | sampling
+  width: 960 # processing width; lower = faster (Raspberry Pi: try 640)
+  fps_limit: 15 # Raspberry Pi: try 5-8
 
   detection:
-    model: "yolo11n.pt" # n=fastest, s/m=more accurate
+    model: "yolo11n.pt" # n = fastest; s/m = more accurate (auto-downloaded)
     device: "auto" # auto | mps | cuda | cpu
     conf: 0.40
-    iou: 0.50
-    imgsz: 640
-    tracker: "bytetrack.yaml"
-    awake_seconds: 8.0
-
-  motion:
-    enabled: true
-    min_area_frac: 0.0015
-    history: 400
-    var_threshold: 24
-    dilate_iter: 2
-    warmup_frames: 30
+    imgsz: 640 # Raspberry Pi: try 416 or 320
 
   recording:
     enabled: true
-    dir: "data/clips" # each camera gets a subdirectory named after its slug
-    pre_roll_s: 4.0
+    dir: "data/clips"
+    pre_roll_s: 4.0 # seconds captured BEFORE the event (ring buffer)
     post_roll_s: 6.0
-    max_clip_s: 120
-    fps: 12
-    crf: 26
-    snapshot: true
-    burn_overlay: false
-    retention_days: 14
-
-  audio:
-    enabled: false # works only for RTSP with an audio track
-    trigger_dbfs: -34.0
-    release_dbfs: -40.0
-    min_event_s: 0.4
-
-cameras:
-  # -------------------------------------------------------------------------
-  - name: "corridor"
-    # A battery camera behind a Reolink Home Hub. on_demand mode does not hold
-    # RTSP open: it connects on a signal and lets the camera sleep.
-    #   curl -X POST 'http://127.0.0.1:8000/api/wake?camera=corridor'
-    source: "0" # target: rtsp://user:password@HUB-IP:554/...
-    mode: "on_demand"
-    session_seconds: 90
-    session_idle_s: 20
-    watch_hold_s: 25
-    watch_max_s: 600
-    # active_hours: "06:00-23:00"   # uncomment to save battery at night
-
-    detection:
-      classes: [0] # 0 = person (COCO)
-
-    counting:
-      # feet - camera looking down the corridor at an angle (what PIR mounting needs)
-      # center - if it looked straight down from the ceiling
-      anchor: "feet"
-      line: [[0.08, 0.62], [0.92, 0.62]]
-      direction_labels:
-        positive: "wejscie"
-        negative: "wyjscie"
-      zones:
-        - name: "strefa-wejscia"
-          polygon: [[0.05, 0.30], [0.48, 0.30], [0.48, 0.97], [0.05, 0.97]]
-
-    privacy:
-      # Empty = nothing is masked. The frame covers our own door, so masks are
-      # not needed. If the frame could not be constrained:
-      #   - name: "neighbours-area"
-      #     polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
-      #     mode: "blur"
-      masks: []
-
-  # -------------------------------------------------------------------------
-  - name: "street"
-    # A balcony camera counting vehicles. Traffic statistics cannot rest on PIR:
-    # it would miss most cars and the numbers would mean nothing. Instead we
-    # sample: 5 minutes every hour, so we see 8.3% of the time, and every event
-    # carries a multiplier for extrapolation.
-    source: "0" # target: rtsp://user:password@HUB-IP:554/...
-    mode: "sampling"
-    sampling:
-      every_minutes: 60
-      seconds: 300
-      align_to_clock: true # windows on the hour => samples comparable across days
-
-    detection:
-      # 2=car 3=motorcycle 5=bus 7=truck
-      classes: [2, 3, 5, 7]
-      # a top-down or angled street view is harder than the shots in COCO
-      conf: 0.30
-
-    motion:
-      # the street moves constantly: a motion gate saves nothing here and could
-      # miss a car entering the frame slowly
-      enabled: false
-
-    counting:
-      anchor: "center" # vehicles from above are blobs, the centre is more stable
-      line: [[0.05, 0.55], [0.95, 0.55]]
-      direction_labels:
-        positive: "w-prawo"
-        negative: "w-lewo"
-      zones: []
-
-    recording:
-      # We count vehicles, we do not archive the street. Statistics go to the
-      # database, video does not stay: less data to defend and a smaller card.
-      enabled: false
-
-    privacy:
-      masks: []
+    retention_days: 14 # `hallwatch prune` deletes older media
 
 storage:
   db: "data/hallwatch.db"
 
 cloud:
+  # Optional off-site backup to any S3-compatible storage (Cloudflare R2,
+  # Backblaze B2, MinIO, AWS). Keys come from env vars, never from this file:
+  #   HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
   enabled: false
-  endpoint_url: "" # e.g. https://<account>.r2.cloudflarestorage.com
+  endpoint_url: ""
   bucket: ""
-  prefix: "hallwatch"
-  region: "auto"
-  delete_local_after_upload: false
-  # keys from env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
 
 notify:
+  # Push notifications to your phone via ntfy.sh - no account needed.
+  # Install the ntfy app, subscribe to a random topic, put it here.
   enabled: false
-  ntfy_server: "https://ntfy.sh"
   ntfy_topic: ""
-  min_interval_s: 60
-  attach_snapshot: true
 
 web:
-  host: "127.0.0.1"
+  host: "127.0.0.1" # see docs: never expose the dashboard without auth_token
   port: 8000
-  stream_fps: 10
-  stream_quality: 70
+  # auth_token: "change-me"   # required if you bind to 0.0.0.0

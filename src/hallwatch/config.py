@@ -78,6 +78,7 @@ class RecordingCfg(BaseModel):
     max_clip_s: float = 120.0
     fps: float = 12.0
     crf: int = 26
+    codec: str = "libx264"
     snapshot: bool = True
     burn_overlay: bool = False
     retention_days: int = 14
@@ -137,7 +138,7 @@ class CameraProfile(BaseModel):
 
     @property
     def slug(self) -> str:
-        """Bezpieczna nazwa do sciezek i URL-i."""
+        """A safe name for paths and URLs."""
         return "".join(c if c.isalnum() or c in "-_" else "-" for c in self.name.lower())
 
     @property
@@ -147,7 +148,7 @@ class CameraProfile(BaseModel):
         return f"{self.recording.dir.rstrip('/')}/{self.slug}"
 
 
-# --- ustawienia globalne -----------------------------------------------------
+# --- global settings ----------------------------------------------------------
 class StorageCfg(BaseModel):
     db: str = "data/hallwatch.db"
 
@@ -174,13 +175,14 @@ class WebCfg(BaseModel):
     port: int = 8000
     stream_fps: float = 10.0
     stream_quality: int = 70
+    auth_token: str = ""  # empty = no auth (safe only on localhost)
 
 
 LEGACY_KEYS = ("detection", "motion", "counting", "privacy", "recording", "audio")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Scala slowniki rekurencyjnie; wartosci z override wygrywaja."""
+    """Merges dictionaries recursively; values from override win."""
     out = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
@@ -200,7 +202,7 @@ class Config(BaseModel):
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @model_validator(mode="after")
-    def _unique_names(self) -> "Config":
+    def _unique_names(self) -> Config:
         seen: set[str] = set()
         for cam in self.cameras:
             if cam.slug in seen:
@@ -216,13 +218,15 @@ class Config(BaseModel):
         for cam in self.cameras:
             if name_or_slug in (cam.name, cam.slug):
                 return cam
-        raise KeyError(f"No such camera '{name_or_slug}'. Dostepne: {[c.name for c in self.cameras]}")
+        raise KeyError(
+            f"No such camera '{name_or_slug}'. Available: {[c.name for c in self.cameras]}"
+        )
 
     def path(self, relative: str) -> Path:
         p = Path(relative)
         return p if p.is_absolute() else self.root / p
 
-    # -- wczytywanie ---------------------------------------------------------
+    # -- loading -------------------------------------------------------------
     @staticmethod
     def _normalize(data: dict[str, Any]) -> dict[str, Any]:
         """Reduces the old and the new file layout to a single shape."""
@@ -243,7 +247,7 @@ class Config(BaseModel):
         return data
 
     @classmethod
-    def load(cls, path: str | Path = "config.yaml") -> "Config":
+    def load(cls, path: str | Path = "config.yaml") -> Config:
         path = Path(path).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(f"Configuration file not found: {path}")

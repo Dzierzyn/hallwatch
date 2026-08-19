@@ -1,12 +1,32 @@
 [project]
 name = "hallwatch"
 version = "0.1.0"
-description = "Private computer-vision system for corridor monitoring: motion detection, people counting, audio detection, event recording"
+description = "Turn any camera into a private, smart monitor: people/vehicle counting, motion + audio events, pre-roll recording, privacy masks, live dashboard"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10,<3.14"
+authors = [{ name = "Daniel Dzierzęcki" }]
+keywords = [
+    "computer-vision", "camera", "surveillance", "yolo", "opencv",
+    "people-counting", "object-tracking", "rtsp", "home-security",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "opencv-python>=4.10",
     "ultralytics>=8.3",
-    "lap>=0.5.12", # solver przypisan wymagany przez ByteTrack
+    "lap>=0.5.12", # assignment solver required by ByteTrack
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.9",
@@ -14,8 +34,15 @@ dependencies = [
     "numpy<2.3",
     "boto3>=1.35",
     "requests>=2.32",
-    "jinja2>=3.1",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Repository = "https://github.com/Dzierzyn/hallwatch"
+Issues = "https://github.com/Dzierzyn/hallwatch/issues"
+Changelog = "https://github.com/Dzierzyn/hallwatch/blob/main/CHANGELOG.md"
 
 [project.scripts]
 hallwatch = "hallwatch.__main__:main"
@@ -26,3 +53,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs ffmpeg and downloads YOLO weights (slow)"]

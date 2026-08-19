@@ -1,11 +1,12 @@
 {{ config(materialized='table') }}
 
--- Ziarno: godzina x kamera. Tabela wejsciowa dla ML i dla dashboardu.
+-- Grain: hour x camera. Input table for ML and for the dashboard.
 
 with cameras as (
-    -- Probkowanie jest wlasciwoscia KAMERY, nie pojedynczej godziny. Gdyby wage
-    -- brac z wiersza, godziny bez zaobserwowanego ruchu mialyby wage 1 i
-    -- wypadaly z ekstrapolacji, systematycznie zawyzajac srednie natezenie.
+    -- Sampling is a property of the CAMERA, not of a single hour. If the weight
+    -- were taken from the row, hours with no observed traffic would get weight 1
+    -- and drop out of the extrapolation, systematically overstating the average
+    -- intensity.
     select
         camera,
         event_kind,

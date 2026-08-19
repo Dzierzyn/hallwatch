@@ -1,6 +1,6 @@
-# Obraz Airflowa z naszym pakietem ELT i dbt w srodku.
-# Celowo NIE instalujemy tu torcha ani reszty stosu CV - orkiestrator
-# nie musi umiec liczyc YOLO, ma tylko wolac kroki na gotowych danych.
+# Airflow image with our ELT package and dbt inside.
+# We deliberately do NOT install torch or the rest of the CV stack here - the
+# orchestrator does not need to run YOLO, it only calls steps on ready data.
 FROM apache/airflow:3.1.2-python3.12
 
 USER root

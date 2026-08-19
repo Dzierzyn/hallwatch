@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from pathlib import Path
+
+import yaml
+from pydantic import ValidationError
 
 from .config import Config
 
@@ -36,12 +38,18 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
     if args.no_record:
         for cam in cfg.cameras:
             cam.recording.enabled = False
+    # --host/--port exist mainly for containers: inside Docker the app must
+    # bind 0.0.0.0 while the host publishes the port on localhost only.
+    if args.host:
+        cfg.web.host = args.host
+    if args.port:
+        cfg.web.port = args.port
 
     manager = PipelineManager(cfg).start()
     app = create_app(cfg, manager)
     url = f"http://{cfg.web.host}:{cfg.web.port}"
     cams = ", ".join(f"{c.name} [{c.mode}]" for c in cfg.cameras)
-    print(f"\n  HallWatch running  ->  {url}\n  Cameras: {cams}\n  Ctrl+C konczy\n")
+    print(f"\n  HallWatch running  ->  {url}\n  Cameras: {cams}\n  Ctrl+C to stop\n")
     try:
         uvicorn.run(app, host=cfg.web.host, port=cfg.web.port, log_level="warning")
     except KeyboardInterrupt:
@@ -80,7 +88,7 @@ def cmd_selftest(args: argparse.Namespace, cfg: Config) -> int:
 
 
 def cmd_wake(args: argparse.Namespace, cfg: Config) -> int:
-    """Budzi dzialajaca instancje (tryb on_demand)."""
+    """Wakes a running instance (on_demand mode)."""
     import requests
 
     url = f"http://{cfg.web.host}:{cfg.web.port}/api/wake"
@@ -90,7 +98,7 @@ def cmd_wake(args: argparse.Namespace, cfg: Config) -> int:
     try:
         resp = requests.post(url, params=params, timeout=10)
         data = resp.json()
-        print(f"{'OK' if data.get('accepted') else 'POMINIETO'}: {data.get('detail')}")
+        print(f"{'OK' if data.get('accepted') else 'SKIPPED'}: {data.get('detail')}")
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR: cannot connect to {url} ({exc})", file=sys.stderr)
@@ -109,7 +117,9 @@ def cmd_prune(args: argparse.Namespace, cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hallwatch",
-        description="Corridor monitoring with computer vision: motion, people, audio, recordings",
+        description=(
+            "Computer-vision monitoring: motion, people/vehicle counting, audio, event recording"
+        ),
     )
     parser.add_argument("-c", "--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -124,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         help="override camera.mode (on_demand = battery camera)",
     )
     p_run.add_argument("--no-record", action="store_true", help="do not save clips")
+    p_run.add_argument("--host", help="override web.host (containers: 0.0.0.0)")
+    p_run.add_argument("--port", type=int, help="override web.port")
     p_run.set_defaults(func=cmd_run)
 
     p_probe = sub.add_parser("probe", help="check the stream and measure FPS")
@@ -162,6 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         print("Copy config.yaml from the repository or point at it with -c", file=sys.stderr)
+        return 2
+    except yaml.YAMLError as exc:
+        print(f"ERROR: {args.config} is not valid YAML: {exc}", file=sys.stderr)
+        return 2
+    except ValidationError as exc:
+        print(f"ERROR: invalid configuration in {args.config}:", file=sys.stderr)
+        for err in exc.errors():
+            loc = ".".join(str(part) for part in err.get("loc", ()))
+            print(f"  {loc}: {err.get('msg')}", file=sys.stderr)
         return 2
 
     return int(args.func(args, cfg))

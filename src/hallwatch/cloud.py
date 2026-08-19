@@ -12,8 +12,8 @@ import os
 import queue
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .config import CloudCfg
 
@@ -25,7 +25,9 @@ CONTENT_TYPES = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg
 class CloudUploader:
     """An upload queue served by a background thread."""
 
-    def __init__(self, cfg: CloudCfg, on_uploaded: Callable[[int, str], None] | None = None) -> None:
+    def __init__(
+        self, cfg: CloudCfg, on_uploaded: Callable[[int, str], None] | None = None
+    ) -> None:
         self.cfg = cfg
         self.on_uploaded = on_uploaded
         self._queue: queue.Queue[tuple[int, Path] | None] = queue.Queue(maxsize=256)
@@ -61,9 +63,9 @@ class CloudUploader:
             self.enabled = True
         except Exception as exc:  # noqa: BLE001
             self.error = str(exc)
-            log.error("Nie udalo sie zainicjowac klienta S3: %s", exc)
+            log.error("Failed to initialise the S3 client: %s", exc)
 
-    def start(self) -> "CloudUploader":
+    def start(self) -> CloudUploader:
         if self.enabled and self._thread is None:
             self._thread = threading.Thread(target=self._worker, name="cloud-upload", daemon=True)
             self._thread.start()
@@ -90,7 +92,11 @@ class CloudUploader:
             event_id, path = item
             try:
                 key = self.key_for(path)
-                extra = {"ContentType": CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")}
+                extra = {
+                    "ContentType": CONTENT_TYPES.get(
+                        path.suffix.lower(), "application/octet-stream"
+                    )
+                }
                 self._client.upload_file(str(path), self.cfg.bucket, key, ExtraArgs=extra)  # type: ignore[union-attr]
                 self.uploaded += 1
                 log.info("Uploaded to cloud: %s", key)
@@ -114,7 +120,7 @@ class CloudUploader:
                 ExpiresIn=expires_s,
             )
         except Exception as exc:  # noqa: BLE001
-            log.warning("Nie udalo sie podpisac URL: %s", exc)
+            log.warning("Could not presign URL: %s", exc)
             return None
 
     def stop(self) -> None:

@@ -30,7 +30,7 @@ def _gcs_prefix(cfg: Settings, table: str) -> str:
 
 
 def sync_to_gcs(cfg: Settings | None = None) -> int:
-    """Wysyla lokalne partycje Parquet do GCS, zachowujac uklad katalogow."""
+    """Uploads local Parquet partitions to GCS, preserving the directory layout."""
     cfg = cfg or settings
     from google.cloud import storage
 
@@ -66,7 +66,7 @@ def ensure_datasets(cfg: Settings | None = None) -> None:
 
 
 def create_external_tables(cfg: Settings | None = None) -> list[str]:
-    """Definiuje tabele zewnetrzne nad Parquet w GCS (partycjonowanie Hive po dt)."""
+    """Defines external tables over Parquet in GCS (Hive partitioning by dt)."""
     cfg = cfg or settings
     from google.cloud import bigquery
     from google.api_core.exceptions import NotFound
@@ -78,7 +78,7 @@ def create_external_tables(cfg: Settings | None = None) -> list[str]:
         ext = bigquery.ExternalConfig("PARQUET")
         ext.source_uris = [f"{uri_prefix}*"]
         hive = bigquery.HivePartitioningOptions()
-        hive.mode = "AUTO"                    # typ kolumny dt wykryty automatycznie
+        hive.mode = "AUTO"                    # dt column type detected automatically
         hive.source_uri_prefix = uri_prefix   # everything after this prefix is a partition
         ext.hive_partitioning = hive
         ext.autodetect = True
@@ -92,17 +92,17 @@ def create_external_tables(cfg: Settings | None = None) -> list[str]:
         tbl.external_data_configuration = ext
         client.create_table(tbl)
         made.append(table_id)
-        log.info("Tabela zewnetrzna: %s -> %s", table_id, uri_prefix)
+        log.info("External table: %s -> %s", table_id, uri_prefix)
     return made
 
 
 def run(cfg: Settings | None = None) -> dict:
     cfg = cfg or settings
     if not cfg.is_bigquery:
-        log.info("target=dev: DuckDB czyta Parquet wprost, load nie jest potrzebny")
+        log.info("target=dev: DuckDB reads Parquet directly, load is not needed")
         return {"skipped": True}
     if not (cfg.gcp_project and cfg.gcs_bucket):
-        raise RuntimeError("Ustaw HW_GCP_PROJECT i HW_GCS_BUCKET dla targetu prod")
+        raise RuntimeError("Set HW_GCP_PROJECT and HW_GCS_BUCKET for the prod target")
 
     ensure_datasets(cfg)
     uploaded = sync_to_gcs(cfg)

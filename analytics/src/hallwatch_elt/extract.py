@@ -27,7 +27,7 @@ class TableSpec:
     name: str
     watermark_col: str  # monotonically increasing column used to take the increment
     time_col: str  # column used to partition by date (epoch seconds)
-    unit: str = "s"  # 's' = epoch sekundy, 'min' = epoch minuty
+    unit: str = "s"  # 's' = epoch seconds, 'min' = epoch minutes
 
 
 TABLES: tuple[TableSpec, ...] = (
@@ -38,7 +38,7 @@ TABLES: tuple[TableSpec, ...] = (
 
 
 class Watermarks:
-    """Prosty magazyn znacznikow: jeden JSON, jedna prawda."""
+    """Simple watermark store: one JSON file, one source of truth."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -90,7 +90,7 @@ def extract_table(
         written.append(path)
 
     wm.set(spec.name, float(df[spec.watermark_col].max()))
-    log.info("%-13s +%d wierszy w %d partycjach", spec.name, len(df), len(written))
+    log.info("%-13s +%d rows in %d partitions", spec.name, len(df), len(written))
     return len(df), written
 
 
@@ -99,14 +99,14 @@ def run(cfg: Settings | None = None, full_refresh: bool = False) -> dict[str, in
     cfg.ensure_dirs()
     if not cfg.source_db.exists():
         raise FileNotFoundError(
-            f"Nie ma bazy zrodlowej: {cfg.source_db}\n"
+            f"Source database not found: {cfg.source_db}\n"
             "Run the CV pipeline or generate demo data: make seed"
         )
 
     wm_path = cfg.state_dir / "watermarks.json"
     if full_refresh and wm_path.exists():
         wm_path.unlink()
-        log.info("full_refresh: znaczniki wyzerowane")
+        log.info("full_refresh: watermarks reset")
     wm = Watermarks(wm_path)
 
     conn = sqlite3.connect(f"file:{cfg.source_db}?mode=ro", uri=True)

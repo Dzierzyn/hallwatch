@@ -14,7 +14,7 @@ from .config import MaskCfg
 
 
 def denormalize(polygon: list[tuple[float, float]], shape: tuple[int, int]) -> np.ndarray:
-    """Wspolrzedne 0..1 -> piksele. shape = (h, w)."""
+    """Coordinates 0..1 -> pixels. shape = (h, w)."""
     h, w = shape[:2]
     pts = np.array([[p[0] * w, p[1] * h] for p in polygon], dtype=np.float32)
     return np.round(pts).astype(np.int32)
@@ -74,8 +74,11 @@ class PrivacyMasker:
         return out
 
     def contains(self, point: tuple[float, float], shape: tuple[int, int]) -> bool:
-        """Czy punkt (px) lezy w jakiejkolwiek masce - do odrzucania detekcji."""
+        """Whether the point (px) lies inside any mask - used to discard detections."""
         for _cfg, pts in self._prepared(shape):
-            if len(pts) >= 3 and cv2.pointPolygonTest(pts, (float(point[0]), float(point[1])), False) >= 0:
+            if (
+                len(pts) >= 3
+                and cv2.pointPolygonTest(pts, (float(point[0]), float(point[1])), False) >= 0
+            ):
                 return True
         return False

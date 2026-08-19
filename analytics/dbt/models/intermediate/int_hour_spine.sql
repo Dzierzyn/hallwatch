@@ -1,8 +1,9 @@
 {{ config(materialized='view') }}
 
--- Kregoslup czasu: KAZDA godzina w zakresie danych, takze te z zerowym ruchem.
--- Bez tego model prognozujacy nigdy nie zobaczy nocnej ciszy i bedzie zawyzal
--- przewidywania - brak wiersza to nie brak danych, to informacja "zero".
+-- Time spine: EVERY hour in the data range, including those with zero traffic.
+-- Without it the forecasting model would never see the quiet of the night and
+-- would overstate its predictions - a missing row is not missing data, it is
+-- the information "zero".
 
 with bounds as (
     select

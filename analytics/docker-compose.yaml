@@ -1,8 +1,8 @@
-# Lokalny Airflow do rozwoju i demonstracji.
-#   docker compose up -d    -> UI na http://localhost:8080 (admin/admin)
+# Local Airflow for development and demonstration.
+#   docker compose up -d    -> UI at http://localhost:8080 (admin/admin)
 #
-# Poswiadczenia GCP wchodza przez podmontowany katalog gcloud (ADC), zeby
-# zaden plik z kluczem nie musial lezec w repozytorium.
+# GCP credentials come in through the mounted gcloud directory (ADC), so that
+# no key file has to live in the repository.
 
 x-airflow-common: &airflow-common
   build: .
@@ -10,7 +10,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    # konfiguracja ELT
+    # ELT configuration
     HW_TARGET: "${HW_TARGET:-dev}"
     HW_SOURCE_DB: /opt/hallwatch/data/hallwatch.db
     HW_RAW_DIR: /opt/hallwatch/data/raw

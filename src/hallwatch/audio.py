@@ -16,8 +16,8 @@ import logging
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 
@@ -47,7 +47,7 @@ def dbfs(samples: np.ndarray) -> float:
 
 
 class AudioMonitor:
-    """Watek nasluchujacy poziomu dzwieku; wola callback po zakonczeniu zdarzenia."""
+    """A thread listening to the sound level; calls the callback when an event ends."""
 
     def __init__(
         self,
@@ -69,12 +69,12 @@ class AudioMonitor:
         self._event_start: float | None = None
         self._event_peak: float = -120.0
 
-    def start(self) -> "AudioMonitor":
+    def start(self) -> AudioMonitor:
         if not self.cfg.enabled:
             return self
         if not str(self.url).lower().startswith("rtsp://"):
-            self.error = "audio wymaga zrodla RTSP"
-            log.warning("Audio pominiete: %s", self.error)
+            self.error = "audio requires an RTSP source"
+            log.warning("Audio skipped: %s", self.error)
             return self
         self._thread = threading.Thread(target=self._run, name="audio-monitor", daemon=True)
         self._thread.start()
@@ -82,11 +82,22 @@ class AudioMonitor:
 
     def _spawn(self) -> subprocess.Popen:
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-rtsp_transport", "tcp",
-            "-i", self.url,
-            "-vn", "-ac", "1", "-ar", str(self.cfg.sample_rate),
-            "-f", "s16le", "-",
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            self.url,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(self.cfg.sample_rate),
+            "-f",
+            "s16le",
+            "-",
         ]
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -121,7 +132,7 @@ class AudioMonitor:
                 self.error = "no audio track in the stream (camera without a microphone?)"
                 log.warning("Audio: %s", self.error)
                 return
-            log.warning("Strumien audio przerwany - restart za %.0fs", backoff)
+            log.warning("Audio stream interrupted - restarting in %.0fs", backoff)
             self._stop.wait(backoff)
 
     def _process(self, level: float, ts: float) -> None:

@@ -1,7 +1,7 @@
 {{ config(materialized='table', tags=['post_ml']) }}
 
--- Uruchamiany PO warstwie ML (tag post_ml), bo czyta jej wyniki.
--- Laczy to, co bylo, z tym, czego sie spodziewalismy, i oznacza rozjazdy.
+-- Runs AFTER the ML layer (tag post_ml), because it reads its results.
+-- Joins what happened with what we expected, and flags the mismatches.
 
 with actuals as (
     select hour_ts, camera, event_kind, events, crossings_total,

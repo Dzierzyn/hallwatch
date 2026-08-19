@@ -1,0 +1,11 @@
+.venv
+.git
+data
+analytics
+tests
+docs
+*.pt
+*.mp4
+.pytest_cache
+.ruff_cache
+__pycache__

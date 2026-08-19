@@ -5,9 +5,9 @@ select
     event_kind,
     {{ trunc_hour('started_at_local') }}  as hour_ts,
     count(*)                        as events,
-    -- probkowanie: widzielismy tylko czesc godziny, wiec liczba zaobserwowana
-    -- to nie liczba rzeczywista. sample_weight = 1/duty_cycle jest mnoznikiem
-    -- do ekstrapolacji. Dla kamer obserwujacych ciagle waga wynosi 1.
+    -- sampling: we saw only part of the hour, so the observed count is not the
+    -- real count. sample_weight = 1/duty_cycle is the extrapolation multiplier.
+    -- For cameras observing continuously the weight is 1.
     sum(sample_weight)              as events_estimated,
     max(sample_weight)              as sample_weight,
     {{ any_true('is_sampled') }}    as is_sampled,

@@ -1,5 +1,5 @@
--- Liczba zarejestrowanych przekroczen musi zgadzac sie z licznikami zdarzenia.
--- Rozjazd znaczy, ze pipeline CV zgubil zapis do jednej z tabel.
+-- The number of recorded crossings must agree with the event counters.
+-- A mismatch means the CV pipeline dropped a write to one of the tables.
 select
     e.event_id,
     e.crossings_total,

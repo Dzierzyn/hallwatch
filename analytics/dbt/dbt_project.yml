@@ -9,9 +9,9 @@ target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
 vars:
-  # katalog z Parquet dla targetu dev (DuckDB czyta pliki wprost)
+  # Parquet directory for the dev target (DuckDB reads the files directly)
   raw_dir: "../data/raw"
-  # strefa, w ktorej interpretujemy 'godzine dnia' w analityce
+  # the time zone in which analytics interprets the 'hour of day'
   timezone: "Europe/Warsaw"
 
 models:

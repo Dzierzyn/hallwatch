@@ -1,7 +1,7 @@
 {{ config(materialized='view') }}
 
--- Oczyszczenie zdarzen: epoch -> timestamp, kamera wyciagnieta z JSON-a meta,
--- nazwy kolumn niezalezne od tego, czy liczylismy ludzi czy samochody.
+-- Event cleaning: epoch -> timestamp, camera pulled from the meta JSON,
+-- column names independent of whether we counted people or cars.
 
 with src as (
     select * from {{ source('hallwatch_raw', 'events') }}
@@ -9,9 +9,9 @@ with src as (
 
 select
     cast(id as bigint)                              as event_id,
-    -- kamera jest kolumna od wersji wielokamerowej; starsze wiersze maja ja
-    -- tylko w JSON-ie meta, wiec bierzemy pierwsza niepusta wartosc
-    coalesce(nullif(camera, ''), {{ json_get('meta', 'camera') }}, 'nieznana') as camera,
+    -- camera has been a column since the multi-camera version; older rows carry
+    -- it only in the meta JSON, so we take the first non-empty value
+    coalesce(nullif(camera, ''), {{ json_get('meta', 'camera') }}, 'unknown') as camera,
     kind                                            as event_kind,
     {{ epoch_to_ts('started_at') }}                 as started_at,
     {{ to_local(epoch_to_ts('started_at')) }}       as started_at_local,

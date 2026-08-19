@@ -75,9 +75,9 @@ def generate(
     seed: int = 42,
     tz: str = "Europe/Warsaw",
 ) -> dict[str, int]:
-    """Tworzy baze SQLite w schemacie HallWatch z syntetyczna historia."""
+    """Creates an SQLite database in the HallWatch schema with a synthetic history."""
     rng = np.random.default_rng(seed)
-    # wzorce dobowe budujemy w czasie LOKALNYM - "szczyt o 7 rano" ma znaczyc
+    # daily patterns are built in LOCAL time - "a peak at 7 a.m." should mean
     # 7 a.m. for the resident, not 7 UTC. Epoch goes into the database anyway.
     local = ZoneInfo(tz)
     end = end or datetime.now(local).replace(minute=0, second=0, microsecond=0)
@@ -89,7 +89,7 @@ def generate(
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
 
-    # (nazwa, kind, bazowe natezenie/h, srednia dlugosc s, duty_cycle)
+    # (name, kind, base rate/h, mean duration s, duty_cycle)
     # The street runs in sampling mode: we observe 5 minutes per hour, so we
     # RECORD only the portion of traffic that was actually seen, and attach
     # a 1/duty weight for extrapolation. That gives the analytics layer a chance
@@ -116,7 +116,7 @@ def generate(
 
             # anomalies: rare but pronounced, material for the detector
             anomaly = 1.0
-            if rng.random() < 0.004:  # ~ raz na 10 dni na kamere
+            if rng.random() < 0.004:  # ~ once every 10 days per camera
                 anomaly = rng.uniform(3.0, 6.0)
             # a weekly seasonal wave, so the model has something beyond the daily cycle
             rate *= 1.0 + 0.12 * math.sin(2 * math.pi * h / (24 * 7))
@@ -137,7 +137,7 @@ def generate(
                 else:
                     n_obj = int(max(1, rng.poisson(1.4)))
 
-                # kierunki: w dzien wiecej wyjsc rano, wiecej wejsc wieczorem
+                # directions: more exits in the morning, more entries in the evening
                 lean_out = 0.65 if 5 <= hod <= 10 else (0.35 if 15 <= hod <= 21 else 0.5)
                 c_out = int(rng.binomial(n_obj, lean_out))
                 c_in = n_obj - c_out
@@ -163,7 +163,7 @@ def generate(
                 row = minute_rows.setdefault((camera, minute), [0, 0, 0, 0, 0])
                 row[0] += int(duration * 12)      # frames
                 row[1] += 1                        # motion
-                row[2] = max(row[2], n_obj)        # persons (szczyt)
+                row[2] = max(row[2], n_obj)        # persons (peak)
                 row[3] += c_in
                 row[4] += c_out
 
@@ -185,5 +185,5 @@ def generate(
     conn.close()
 
     stats = {"events": len(events), "crossings": len(crossings), "minutes": len(minute_rows)}
-    log.info("Wygenerowano %s od %s do %s", stats, start.date(), end.date())
+    log.info("Generated %s from %s to %s", stats, start.date(), end.date())
     return stats

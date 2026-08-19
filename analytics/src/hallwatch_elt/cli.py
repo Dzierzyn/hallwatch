@@ -46,7 +46,7 @@ def task_load() -> dict:
 
 
 def task_dbt(*args: str) -> int:
-    """Uruchamia dbt z katalogu projektu, dziedziczac target ze srodowiska."""
+    """Runs dbt from the project directory, inheriting the target from the environment."""
     cmd = [sys.executable.replace("python", "dbt"), *args, "--profiles-dir", "."]
     if not Path(cmd[0]).exists():
         cmd[0] = str(ROOT / ".venv" / "bin" / "dbt")
@@ -65,7 +65,7 @@ def task_dbt(*args: str) -> int:
     result = subprocess.run([*cmd, "--vars", f"{{raw_dir: '{settings.raw_dir}'}}"],
                             cwd=ROOT / "dbt", env=env)
     if result.returncode != 0:
-        raise RuntimeError(f"dbt {' '.join(args)} zakonczyl sie kodem {result.returncode}")
+        raise RuntimeError(f"dbt {' '.join(args)} exited with code {result.returncode}")
     return result.returncode
 
 
@@ -77,7 +77,7 @@ def task_ml() -> dict:
     hourly = wh.read("agg_hourly_traffic")
     preds, metrics = forecast.run(hourly)
     if preds.empty:
-        raise RuntimeError("Model nie zwrocil predykcji - za malo danych?")
+        raise RuntimeError("Model returned no predictions - not enough data?")
     anomalies = anomaly.run(preds, hourly)
 
     wh.write("ml_hourly_forecast", preds)
@@ -99,17 +99,17 @@ def task_all(full_refresh: bool = False) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="hw-elt", description="ELT + ML nad danymi HallWatch")
+    p = argparse.ArgumentParser(prog="hw-elt", description="ELT + ML over HallWatch data")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("seed", help="wygeneruj syntetyczna historie demo")
+    s = sub.add_parser("seed", help="generate synthetic demo history")
     s.add_argument("--days", type=int, default=90)
-    e = sub.add_parser("extract", help="SQLite -> Parquet (przyrostowo)")
+    e = sub.add_parser("extract", help="SQLite -> Parquet (incremental)")
     e.add_argument("--full-refresh", action="store_true")
-    sub.add_parser("load", help="Parquet -> GCS -> tabele zewnetrzne BigQuery")
-    sub.add_parser("ml", help="prognoza + anomalie")
-    a = sub.add_parser("all", help="caly pipeline end-to-end")
+    sub.add_parser("load", help="Parquet -> GCS -> BigQuery external tables")
+    sub.add_parser("ml", help="forecast + anomalies")
+    a = sub.add_parser("all", help="the whole pipeline end-to-end")
     a.add_argument("--full-refresh", action="store_true")
 
     args = p.parse_args(argv)

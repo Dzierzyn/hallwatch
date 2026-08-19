@@ -1,1 +1,1 @@
-"""Warstwa ML nad martami: prognoza ruchu i wykrywanie anomalii."""
+"""ML layer over the marts: traffic forecasting and anomaly detection."""

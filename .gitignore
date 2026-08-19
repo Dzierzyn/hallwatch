@@ -1,13 +1,13 @@
-# dane i nagrania - nigdy do repo
+# data and recordings - never in the repo
 data/
 *.db
 *.db-wal
 *.db-shm
 *.mp4
 *.jpg
-zones.generated.yaml
+zones.*.yaml
 
-# wagi modeli (sciagaja sie same)
+# model weights (auto-downloaded on first run)
 *.pt
 *.onnx
 
@@ -21,8 +21,10 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
-# sekrety
+# secrets
 .env
+!.env.example
 
-# macOS
+# OS noise
 .DS_Store
+Thumbs.db

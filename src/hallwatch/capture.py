@@ -10,6 +10,7 @@ frames are lost.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
@@ -62,14 +63,27 @@ class FrameSource:
         self.native_fps: float = 0.0
         self.finished = False  # True once the file has ended
 
-    # -- otwieranie ---------------------------------------------------------
+    # -- opening --------------------------------------------------------------
+    def _open_hint(self) -> str:
+        """A human-oriented hint appended to open-failure messages."""
+        s = str(self.source).strip()
+        if s.isdigit() and sys.platform == "darwin":
+            return (
+                " (grant Camera permission to your terminal in "
+                "System Settings > Privacy & Security)"
+            )
+        if s.lower().startswith("rtsp://"):
+            return f" (verify the URL with: hallwatch probe --source {s})"
+        return ""
+
     def _open(self) -> bool:
         target = parse_source(self.source)
-        if isinstance(target, str) and not target.lower().startswith(
-            ("rtsp://", "rtmp://", "http://", "https://")
+        if (
+            isinstance(target, str)
+            and not target.lower().startswith(("rtsp://", "rtmp://", "http://", "https://"))
+            and not Path(target).exists()
         ):
-            if not Path(target).exists():
-                raise FileNotFoundError(f"No such video file: {target}")
+            raise FileNotFoundError(f"No such video file: {target}")
 
         cap = cv2.VideoCapture(target, cv2.CAP_FFMPEG if isinstance(target, str) else cv2.CAP_ANY)
         if not cap.isOpened():
@@ -77,7 +91,7 @@ class FrameSource:
             return False
 
         if self.live:
-            # maly bufor = mala latencja
+            # small buffer = low latency
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.native_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         self._cap = cap
@@ -98,14 +112,17 @@ class FrameSource:
             except FileNotFoundError:
                 raise
             if not self.live:
-                raise RuntimeError(f"Nie udalo sie otworzyc zrodla: {self.source}")
+                raise RuntimeError(f"Failed to open source: {self.source}{self._open_hint()}")
             log.warning(
-                "Nie udalo sie otworzyc %s, ponawiam za %.1fs", self.source, self.reconnect_delay_s
+                "Failed to open %s, retrying in %.1fs%s",
+                self.source,
+                self.reconnect_delay_s,
+                self._open_hint(),
             )
             self._stop.wait(self.reconnect_delay_s)
 
     # -- thread for live sources --------------------------------------------
-    def start(self) -> "FrameSource":
+    def start(self) -> FrameSource:
         self.open()
         if self.live:
             self._thread = threading.Thread(target=self._pump, name="frame-pump", daemon=True)
@@ -120,7 +137,7 @@ class FrameSource:
             if not ok or frame is None:
                 fails += 1
                 if fails >= 15:
-                    log.warning("Strumien padl - reconnect")
+                    log.warning("Stream died - reconnecting")
                     self._reconnect()
                     fails = 0
                 else:
@@ -142,14 +159,20 @@ class FrameSource:
         try:
             self.open()
         except Exception as exc:  # noqa: BLE001 - the loop has to survive
-            log.error("Reconnect nieudany: %s", exc)
+            log.error("Reconnect failed: %s", exc)
 
     # -- read ---------------------------------------------------------------
     def _resize(self, frame: np.ndarray) -> np.ndarray:
-        if self.width and frame.shape[1] != self.width:
-            h = int(round(frame.shape[0] * self.width / frame.shape[1]))
-            frame = cv2.resize(frame, (self.width, h), interpolation=cv2.INTER_AREA)
-        return frame
+        if not self.width:
+            return frame
+        # libx264 + yuv420p require EVEN dimensions; an odd height (portrait phone
+        # cameras) would make ffmpeg die and every clip get deleted as empty.
+        width = max(2, self.width - self.width % 2)
+        if frame.shape[1] == width:
+            return frame
+        h = int(round(frame.shape[0] * width / frame.shape[1]))
+        h = max(2, h - h % 2)  # round DOWN to even
+        return cv2.resize(frame, (width, h), interpolation=cv2.INTER_AREA)
 
     def read(self, timeout: float = 5.0) -> tuple[np.ndarray | None, float]:
         """Returns (frame, timestamp). A None frame means no new data or end of file."""
@@ -183,7 +206,7 @@ class FrameSource:
             self._cap.release()
             self._cap = None
 
-    def __enter__(self) -> "FrameSource":
+    def __enter__(self) -> FrameSource:
         return self.start()
 
     def __exit__(self, *exc: object) -> None:

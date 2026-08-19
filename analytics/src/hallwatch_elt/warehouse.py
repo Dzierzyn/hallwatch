@@ -57,7 +57,7 @@ class Warehouse:
                 job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE"),
             )
             job.result()
-            log.info("BigQuery %s <- %d wierszy", table_id, len(df))
+            log.info("BigQuery %s <- %d rows", table_id, len(df))
             return len(df)
 
         import duckdb
@@ -68,7 +68,7 @@ class Warehouse:
             con.register("_incoming", df)
             con.execute(f"CREATE OR REPLACE TABLE main_ml.{relation} AS SELECT * FROM _incoming")
             con.unregister("_incoming")
-            log.info("DuckDB main_ml.%s <- %d wierszy", relation, len(df))
+            log.info("DuckDB main_ml.%s <- %d rows", relation, len(df))
             return len(df)
         finally:
             con.close()

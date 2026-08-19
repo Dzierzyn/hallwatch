@@ -1,13 +1,13 @@
 hallwatch:
   target: "{{ env_var('HW_TARGET', 'dev') }}"
   outputs:
-    # dev: DuckDB czyta Parquet z dysku - pelny pipeline bez konta w chmurze
+    # dev: DuckDB reads Parquet from disk - the full pipeline with no cloud account
     dev:
       type: duckdb
       path: "{{ env_var('HW_DUCKDB', '../data/warehouse.duckdb') }}"
       threads: 4
       extensions: [parquet]
-    # prod: BigQuery przez gcloud ADC (bez plikow z kluczami w repo)
+    # prod: BigQuery via gcloud ADC (no key files in the repo)
     prod:
       type: bigquery
       method: oauth

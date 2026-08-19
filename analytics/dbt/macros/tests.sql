@@ -1,6 +1,6 @@
 {% test dbt_utils_non_negative(model, column_name) %}
-    {#- Wartosci zliczen i czasow trwania nie moga byc ujemne.
-        Ujemna wartosc oznacza blad zegara albo uszkodzony zapis. -#}
+    {#- Counts and durations must not be negative.
+        A negative value means a clock error or a corrupted record. -#}
     select {{ column_name }}
     from {{ model }}
     where {{ column_name }} < 0

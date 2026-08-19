@@ -1,4 +1,4 @@
-"""HallWatch: a private computer-vision pipeline for a corridor."""
+"""HallWatch: an open-source computer-vision pipeline for counting people and vehicles from any camera."""
 
 import os
 

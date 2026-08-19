@@ -15,7 +15,7 @@ import pandas as pd
 HORIZON_H = 24
 TARGET = "events"
 
-# opoznienia dostepne na >= 24 h przed prognozowana godzina
+# lags available at least 24 h before the forecast hour
 LAGS = (24, 25, 48, 168, 169)
 ROLLINGS = (24, 168)
 
@@ -24,7 +24,7 @@ def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
     ts = pd.to_datetime(df["hour_ts"])
     out = df.copy()
     out["hour_of_day"] = ts.dt.hour
-    out["day_of_week"] = ts.dt.dayofweek  # 0=poniedzialek
+    out["day_of_week"] = ts.dt.dayofweek  # 0=Monday
     out["is_weekend"] = (out["day_of_week"] >= 5).astype(int)
     out["day_of_month"] = ts.dt.day
     # cyclical encoding: 23:00 and 00:00 should be close to each other,

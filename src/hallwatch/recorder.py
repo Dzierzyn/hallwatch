@@ -29,12 +29,22 @@ def ffmpeg_available() -> bool:
 
 
 class ClipWriter:
-    """Pipe surowych klatek BGR -> ffmpeg -> mp4 (H.264, playowalny w przegladarce)."""
+    """Pipes raw BGR frames -> ffmpeg -> mp4 (H.264, playable in a browser)."""
 
-    def __init__(self, path: Path, width: int, height: int, fps: float, crf: int = 26) -> None:
+    def __init__(
+        self,
+        path: Path,
+        width: int,
+        height: int,
+        fps: float,
+        crf: int = 26,
+        codec: str = "libx264",
+    ) -> None:
         self.path = path
-        self.width = width
-        self.height = height
+        # libx264 + yuv420p require EVEN dimensions - floor defensively; feed()
+        # resizes any frame that does not match, so this is always safe.
+        self.width = max(2, width - width % 2)
+        self.height = max(2, height - height % 2)
         self.fps = max(1.0, float(fps))
         self.frame_interval = 1.0 / self.fps
         self.frames_written = 0
@@ -42,14 +52,35 @@ class ClipWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "rawvideo", "-pix_fmt", "bgr24",
-            "-s", f"{width}x{height}", "-r", f"{self.fps:g}",
-            "-i", "-",
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-s",
+            f"{self.width}x{self.height}",
+            "-r",
+            f"{self.fps:g}",
+            "-i",
+            "-",
             "-an",
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-crf", str(crf), "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+            "-c:v",
+            codec,
+        ]
+        if codec == "libx264":
+            # hardware encoders do not accept these flags
+            cmd += ["-preset", "veryfast", "-tune", "zerolatency"]
+        cmd += [
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
             str(path),
         ]
         self.proc = subprocess.Popen(
@@ -78,7 +109,7 @@ class ClipWriter:
                 self.proc.stdin.write(data)
                 self.frames_written += 1
         except (BrokenPipeError, ValueError):
-            log.warning("ffmpeg zamknal pipe dla %s", self.path.name)
+            log.warning("ffmpeg closed the pipe for %s", self.path.name)
 
     @property
     def duration_s(self) -> float:
@@ -86,7 +117,7 @@ class ClipWriter:
 
     def close(self) -> Path | None:
         err = b""
-        # communicate() samo domyka stdin i czeka, az ffmpeg dopisze moov atom
+        # communicate() closes stdin itself and waits for ffmpeg to append the moov atom
         try:
             _, err = self.proc.communicate(timeout=20)
         except subprocess.TimeoutExpired:
@@ -96,14 +127,18 @@ class ClipWriter:
             self.proc.kill()
             self.proc.wait(timeout=5)
         if self.frames_written == 0 or not self.path.exists() or self.path.stat().st_size == 0:
-            log.warning("Clip empty, removing: %s (%s)", self.path.name, err[:200] if err else "")
+            log.error(
+                "Empty clip, removing: %s%s",
+                self.path.name,
+                f" - ffmpeg stderr: {err.decode(errors='replace').strip()}" if err else "",
+            )
             self.path.unlink(missing_ok=True)
             return None
         return self.path
 
 
 class EventRecorder:
-    """Bufor pierscieniowy + zarzadzanie aktywnym klipem zdarzenia."""
+    """Ring buffer plus management of the active event clip."""
 
     def __init__(self, cfg: RecordingCfg, out_dir: Path) -> None:
         self.cfg = cfg
@@ -111,7 +146,7 @@ class EventRecorder:
         buffer_len = max(1, int(cfg.pre_roll_s * cfg.fps))
         self._ring: deque[tuple[np.ndarray, float]] = deque(maxlen=buffer_len)
         self._writer: ClipWriter | None = None
-        self._pending: tuple[float, bool] | None = None  # (ts, uzyj_pre_rolla)
+        self._pending: tuple[float, bool] | None = None  # (ts, use_preroll)
         self._started_at: float = 0.0
         self.enabled = cfg.enabled and ffmpeg_available()
         if cfg.enabled and not self.enabled:
@@ -134,7 +169,7 @@ class EventRecorder:
         assert self._writer is not None
         self._writer.feed(frame, ts)
         if self._writer.duration_s >= self.cfg.max_clip_s:
-            log.info("Klip osiagnal max_clip_s - domykam i zaczynam nastepny segment")
+            log.info("Clip reached max_clip_s - closing it and starting the next segment")
             self.stop()
             self._pending = (ts, False)  # a new segment starts from the next frame
 
@@ -154,7 +189,7 @@ class EventRecorder:
 
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(ts))
         path = self.out_dir / f"{stamp}.mp4"
-        self._writer = ClipWriter(path, w, h, self.cfg.fps, self.cfg.crf)
+        self._writer = ClipWriter(path, w, h, self.cfg.fps, self.cfg.crf, self.cfg.codec)
         self._started_at = frames[0][1] if frames else ts
         for f, fts in frames:
             self._writer.feed(f, fts)

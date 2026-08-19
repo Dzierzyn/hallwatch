@@ -1,0 +1,36 @@
+# Example: a battery-powered camera (e.g. Reolink Argus behind a Home Hub).
+#
+# Battery cameras cannot keep an RTSP stream open - it prevents them from
+# sleeping and drains the battery within hours. `on_demand` mode connects only
+# when something asks it to, grabs a short session, then lets the camera sleep:
+#
+#   curl -X POST http://127.0.0.1:8000/api/wake        # from a hub automation
+#   hallwatch wake                                      # from a terminal
+#
+# The dashboard's "Watch on demand" button holds the session open while you
+# are actually looking, and releases it when you close the tab.
+
+cameras:
+  - name: "front-door"
+    source: "rtsp://user:password@HUB-IP:554/h264Preview_01_sub"
+    mode: "on_demand"
+    session_seconds: 90 # hard cap per session
+    session_idle_s: 20 # disconnect after this much quiet
+    watch_hold_s: 25 # how long one dashboard heartbeat holds the session
+    watch_max_s: 600 # safety cap: a forgotten tab cannot drain the battery
+    active_hours: "06:00-23:00" # ignore wake signals at night (optional)
+
+    detection:
+      classes: [0] # people
+
+    counting:
+      line: [[0.08, 0.62], [0.92, 0.62]]
+      direction_labels: { positive: "in", negative: "out" }
+      anchor: "feet"
+
+storage:
+  db: "data/hallwatch.db"
+
+web:
+  host: "127.0.0.1"
+  port: 8000

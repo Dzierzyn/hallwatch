@@ -21,7 +21,6 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -41,7 +40,7 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 
-# klasy COCO traktowane zbiorczo jako "pojazd" w statystykach ruchu
+# COCO classes treated collectively as "vehicle" in traffic statistics
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "train"}
 
 
@@ -114,7 +113,7 @@ class Pipeline:
         self.detector: PersonDetector | None = None
         self.audio = AudioMonitor(prof.source, prof.audio, on_event=self._on_audio_event)
 
-        # stan zdarzenia
+        # event state
         self._event_id: int | None = None
         self._event_started: float = 0.0
         self._last_activity: float = 0.0
@@ -134,8 +133,8 @@ class Pipeline:
         self._last_flush = time.time()
         self._fps_ema = 0.0
 
-    # -- cykl zycia ---------------------------------------------------------
-    def start(self) -> "Pipeline":
+    # -- lifecycle ------------------------------------------------------------
+    def start(self) -> Pipeline:
         self._thread = threading.Thread(target=self._guarded_run, name="pipeline", daemon=True)
         self._thread.start()
         return self
@@ -144,7 +143,7 @@ class Pipeline:
         try:
             self.run()
         except Exception as exc:  # noqa: BLE001
-            log.exception("Pipeline padl: %s", exc)
+            log.exception("Pipeline crashed: %s", exc)
             with self._state_lock:
                 self.state.last_error = str(exc)
 
@@ -158,9 +157,9 @@ class Pipeline:
             self.uploader.stop()
             self.store.close()
 
-    # -- petla glowna -------------------------------------------------------
+    # -- main loop ------------------------------------------------------------
     def run(self) -> None:
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         self.detector = PersonDetector(self.prof.detection)
         with self._state_lock:
             self.state.device = self.detector.device
@@ -182,7 +181,7 @@ class Pipeline:
                 self._run_continuous()
 
     def _open_source(self) -> FrameSource:
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         return FrameSource(
             prof.source,
             width=prof.width,
@@ -194,7 +193,7 @@ class Pipeline:
         self, source: FrameSource, deadline: float | None = None, idle_exit: bool = True
     ) -> str:
         """Processes frames for as long as there is a reason to. Returns the exit reason."""
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         min_interval = 1.0 / prof.fps_limit if prof.fps_limit else 0.0
         last_loop = 0.0
 
@@ -216,7 +215,7 @@ class Pipeline:
             if deadline is not None:
                 if ts < self._watch_until:
                     # someone is watching - do not disconnect, even with a quiet frame.
-                    # Bezpiecznik chroni bateria przed zapomniana zakladka.
+                    # The safety limit protects the battery from a forgotten browser tab.
                     if ts - self._session_started > prof.watch_max_s:
                         return "watch-limit"
                 elif ts > deadline:
@@ -226,8 +225,7 @@ class Pipeline:
         return "stop"
 
     def _run_continuous(self) -> None:
-        prof = self.prof
-        log.info("Pipeline wystartowal w trybie continuous (zrodlo=%s)", self.prof.source)
+        log.info("Pipeline started in continuous mode (source=%s)", self.prof.source)
         source = self._open_source()
         try:
             reason = self._pump(source)
@@ -237,7 +235,7 @@ class Pipeline:
             source.stop()
             self._close_event(time.time(), reason="stop")
 
-    # -- tryb bateryjny -----------------------------------------------------
+    # -- battery mode ---------------------------------------------------------
     def _run_on_demand(self) -> None:
         """The stream is opened only on a wake signal.
 
@@ -247,29 +245,29 @@ class Pipeline:
         the hub), take a short session and disconnect so the camera can go back to
         sleep.
         """
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         log.info(
             "Pipeline started in on_demand mode (session max %.0fs, idle %.0fs%s)",
             prof.session_seconds,
             prof.session_idle_s,
-            f", godziny {prof.active_hours}" if prof.active_hours else "",
+            f", hours {prof.active_hours}" if prof.active_hours else "",
         )
         while not self._stop.is_set():
             if not self._wake.wait(timeout=1.0):
                 continue
             self._wake.clear()
             if not self._in_active_window():
-                log.info("Wybudzenie poza godzinami aktywnosci - ignoruje")
+                log.info("Wake-up outside active hours - ignoring")
                 continue
             self._session()
 
     def _session(
         self, max_seconds: float | None = None, idle_exit: bool = True, tag: str = "Session"
     ) -> None:
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         started = time.time()
         self._session_started = started
-        log.info("%s: lacze sie ze zrodlem", tag)
+        log.info("%s: connecting to the source", tag)
         # a fresh background model for each session - the old one is useless after a break,
         # and the warmup is shortened, because the wake signal already told us about the event
         self.motion = MotionDetector(prof.motion.model_copy(update={"warmup_frames": 3}))
@@ -287,10 +285,11 @@ class Pipeline:
             self._close_event(time.time(), reason="session-end")
             with self._state_lock:
                 self.state.session_active = False
-        log.info("%s ended after %.1fs (%s), the camera may sleep",
-                 tag, time.time() - started, reason)
+        log.info(
+            "%s ended after %.1fs (%s), the camera may sleep", tag, time.time() - started, reason
+        )
 
-    # -- tryb probkowania (statystyki ruchu) --------------------------------
+    # -- sampling mode (traffic statistics) ------------------------------------
     def _run_sampling(self) -> None:
         """Observes a short window at a fixed interval and extrapolates.
 
@@ -308,7 +307,9 @@ class Pipeline:
         s = prof.sampling
         log.info(
             "Pipeline started in sampling mode: %.0fs every %.0f min (we see %.1f%% of the time)",
-            s.seconds, s.every_minutes, s.duty_cycle * 100,
+            s.seconds,
+            s.every_minutes,
+            s.duty_cycle * 100,
         )
         first = True
         while not self._stop.is_set():
@@ -333,7 +334,6 @@ class Pipeline:
         return period - (time.time() % period)
 
     def _in_active_window(self, now: float | None = None) -> bool:
-        prof = self.prof
         window = self.prof.active_hours
         if not window:
             return True
@@ -342,7 +342,7 @@ class Pipeline:
             sh, sm = (int(v) for v in start_s.split(":"))
             eh, em = (int(v) for v in end_s.split(":"))
         except ValueError:
-            log.warning("Nie rozumiem camera.active_hours=%r - ignoruje ograniczenie", window)
+            log.warning("Cannot parse camera.active_hours=%r - ignoring the restriction", window)
             return True
         lt = time.localtime(now if now is not None else time.time())
         minutes = lt.tm_hour * 60 + lt.tm_min
@@ -351,10 +351,9 @@ class Pipeline:
 
     def wake(self, source: str = "api") -> bool:
         """Reports a wake-up. Returns False in continuous mode (where it does nothing)."""
-        prof = self.prof
         if self.prof.mode != "on_demand":
             return False
-        log.info("Sygnal wybudzenia (%s)", source)
+        log.info("Wake signal (%s)", source)
         self._wake.set()
         return True
 
@@ -364,9 +363,9 @@ class Pipeline:
         Called periodically for as long as the browser tab is visible. If there is no
         session it wakes the camera; if there is, it extends it by watch_hold_s.
         """
-        cfg, prof = self.cfg, self.prof
+        _cfg, prof = self.cfg, self.prof
         if prof.mode != "on_demand":
-            return {"holding": False, "detail": "tryb continuous - strumien jest ciagly"}
+            return {"holding": False, "detail": "continuous mode - the stream is always on"}
 
         now = time.time()
         self._watch_until = now + prof.watch_hold_s
@@ -375,7 +374,11 @@ class Pipeline:
             self.state.watch_until = self._watch_until
         if not active:
             self._wake.set()
-        remaining = max(0.0, prof.watch_max_s - (now - self._session_started)) if active else prof.watch_max_s
+        remaining = (
+            max(0.0, prof.watch_max_s - (now - self._session_started))
+            if active
+            else prof.watch_max_s
+        )
         return {
             "holding": True,
             "session_active": active,
@@ -386,10 +389,10 @@ class Pipeline:
     def _process_frame(self, frame: np.ndarray, ts: float, source: FrameSource) -> None:
         cfg, prof = self.cfg, self.prof
 
-        # 1. prywatnosc PRZED czymkolwiek innym
+        # 1. privacy BEFORE anything else
         frame = self.masker.apply(frame)
 
-        # 2. tani straznik
+        # 2. the cheap guard
         motion = self.motion.update(frame)
 
         # 3. detection only when there is a reason for it
@@ -403,7 +406,7 @@ class Pipeline:
             detections = self.detector.detect(frame, track=True)
             detect_ms = (time.perf_counter() - t0) * 1000.0
 
-        # detekcje, ktorych kotwica wpada w maske prywatnosci - odrzucamy
+        # detections whose anchor falls inside a privacy mask are discarded
         # (dead path for as long as privacy.masks is empty)
         if self.masker.active and detections:
             anchor_mode = prof.counting.anchor
@@ -413,20 +416,20 @@ class Pipeline:
                 if not self.masker.contains(d.anchor(anchor_mode), frame.shape)
             ]
 
-        # 4. liczenie
+        # 4. counting
         crossings = self.counter.update(detections, frame.shape, ts)
         persons = len(detections)
         if detections and self.detector is not None:
             for d in detections:
                 self._event_classes[self.detector.names.get(d.cls, str(d.cls))] += 1
 
-        # 5. maszyna stanow zdarzenia
+        # 5. event state machine
         activity = motion.detected or persons > 0
         if activity:
             self._last_activity = ts
         self._update_event(frame, ts, activity, persons, crossings)
 
-        # 6. nakladka
+        # 6. overlay
         annotated = frame.copy()
         draw.draw_zones(annotated, self.counter)
         draw.draw_line(annotated, self.counter)
@@ -444,7 +447,7 @@ class Pipeline:
         hud = [
             (f"FPS {fps:4.1f}   people {persons}", draw.WHITE),
             (
-                f"{'AWAKE' if awake else 'IDLE '}  YOLO {detect_ms:5.1f}ms  motion {motion.area_frac*100:4.1f}%",
+                f"{'AWAKE' if awake else 'IDLE '}  YOLO {detect_ms:5.1f}ms  motion {motion.area_frac * 100:4.1f}%",
                 draw.GREEN if awake else draw.GREY,
             ),
             (
@@ -469,12 +472,12 @@ class Pipeline:
         # 7. recording: a clean (masked) frame, or one with the overlay burned in
         self.recorder.push(annotated if prof.recording.burn_overlay else frame, ts)
 
-        # kadr "najlepszy" do miniatury zdarzenia = najwiecej osob naraz
+        # the "best" frame for the event thumbnail = the most people at once
         if self._event_id is not None and persons >= self._best_persons:
             self._best_persons = persons
             self._best_frame = annotated.copy()
 
-        # 8. publikacja stanu
+        # 8. state publication
         ok, buf = cv2.imencode(
             ".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), cfg.web.stream_quality]
         )
@@ -501,7 +504,7 @@ class Pipeline:
             s.frames_total += 1
             s.detect_ms = detect_ms
 
-        # 9. statystyki minutowe
+        # 9. per-minute statistics
         self._pending["frames"] += 1
         self._pending["motion"] += int(motion.detected)
         self._pending["persons"] = max(self._pending["persons"], persons)
@@ -530,7 +533,7 @@ class Pipeline:
         self._fps_ema = inst if self._fps_ema == 0 else 0.9 * self._fps_ema + 0.1 * inst
         return self._fps_ema
 
-    # -- zdarzenia ----------------------------------------------------------
+    # -- events ---------------------------------------------------------------
     def _update_event(
         self,
         frame: np.ndarray,
@@ -539,7 +542,6 @@ class Pipeline:
         persons: int,
         crossings: list,
     ) -> None:
-        prof = self.prof
         if self._event_id is None:
             if activity:
                 self._open_event(ts, kind="person" if persons else "motion")
@@ -580,7 +582,6 @@ class Pipeline:
         log.info("Event #%s opened (%s)", self._event_id, kind)
 
     def _close_event(self, ts: float, reason: str = "quiet") -> None:
-        prof = self.prof
         if self._event_id is None:
             return
         event_id = self._event_id
@@ -606,8 +607,11 @@ class Pipeline:
         )
         log.info(
             "Event #%d closed (%s, %.1fs, max people %d, %s)",
-            event_id, reason, ts - self._event_started, self._event_max_persons,
-            clip.name if clip else "bez klipu",
+            event_id,
+            reason,
+            ts - self._event_started,
+            self._event_max_persons,
+            clip.name if clip else "no clip",
         )
 
         for media in (clip, snapshot):
@@ -617,7 +621,7 @@ class Pipeline:
         if self._event_max_persons > 0:
             labels = self.counter.cfg.direction_labels
             self.notifier.send_async(
-                f"{self.prof.name}: {self._event_max_persons} os.",
+                f"{self.prof.name}: {self._event_max_persons} person(s)",
                 f"Event #{event_id}, time {ts - self._event_started:.0f}s, "
                 f"{labels.positive}: {self._event_in}, {labels.negative}: {self._event_out}",
                 "default",
@@ -645,19 +649,16 @@ class Pipeline:
         return name
 
     def _on_audio_event(self, ev: AudioEvent) -> None:
-        """Callback z watku audio - dolacza szczyt do trwajacego zdarzenia albo tworzy nowe."""
-        prof = self.prof
+        """Callback from the audio thread - attaches the peak to an ongoing event or creates a new one."""
         log.info("Audio event: %.1f dBFS, %.1fs", ev.peak_dbfs, ev.duration_s)
         if self._event_id is not None:
             self._event_peak_dbfs = max(self._event_peak_dbfs or -120.0, ev.peak_dbfs)
             return
         event_id = self.store.open_event("audio", ev.started_at, meta={"camera": self.prof.name})
-        self.store.close_event(
-            event_id, ended_at=ev.ended_at, peak_dbfs=ev.peak_dbfs, kind="audio"
-        )
+        self.store.close_event(event_id, ended_at=ev.ended_at, peak_dbfs=ev.peak_dbfs, kind="audio")
         self.notifier.send_async(
-            f"{self.prof.name}: audio",
-            f"Szczyt {ev.peak_dbfs:.1f} dBFS przez {ev.duration_s:.1f}s",
+            f"{self.prof.name}: sound",
+            f"Peak {ev.peak_dbfs:.1f} dBFS for {ev.duration_s:.1f}s",
             "default",
             "loud_sound",
         )
@@ -700,8 +701,8 @@ class PipelineManager:
         if event_id:
             self.store.close_event(event_id, cloud_key=key)
 
-    def start(self) -> "PipelineManager":
-        for slug, pipe in self.pipelines.items():
+    def start(self) -> PipelineManager:
+        for _slug, pipe in self.pipelines.items():
             log.info("Starting camera '%s' (%s)", pipe.prof.name, pipe.prof.mode)
             pipe.start()
         return self

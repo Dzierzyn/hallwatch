@@ -1,10 +1,10 @@
 {#
-  Makra przenosnosci miedzy DuckDB (dev) i BigQuery (prod).
+  Portability macros between DuckDB (dev) and BigQuery (prod).
 
-  Powod istnienia: chcemy rozwijac i testowac caly pipeline lokalnie, bez konta
-  w chmurze i bez placenia za kazde 'dbt run', a jednoczesnie uruchamiac ten SAM
-  kod na BigQuery. Roznice dialektow sa zamkniete tutaj, dzieki czemu modele
-  pozostaja czytelnym SQL-em.
+  Reason to exist: we want to develop and test the whole pipeline locally,
+  without a cloud account and without paying for every 'dbt run', while running
+  the SAME code on BigQuery. Dialect differences are confined here, so the
+  models stay readable SQL.
 #}
 
 {% macro epoch_to_ts(col) -%}
@@ -32,7 +32,7 @@
 {%- endmacro %}
 
 {% macro day_of_week(col) -%}
-  {#- ujednolicone do 1=niedziela .. 7=sobota (konwencja BigQuery) -#}
+  {#- unified to 1=Sunday .. 7=Saturday (BigQuery convention) -#}
   {%- if target.type == 'bigquery' -%}
     extract(dayofweek from {{ col }})
   {%- else -%}
@@ -59,11 +59,11 @@
 
 {% macro to_local(col) -%}
   {#-
-    Strefa czasowa jawnie, bo domyslne zachowanie sie ROZNI:
-    DuckDB liczy extract() w strefie sesji, BigQuery w UTC. Bez tego makra
-    ten sam kod dawalby inny profil dobowy w dev i w prod, i nikt by tego
-    nie zauwazyl, dopoki ktos nie porownalby wykresow.
-    Obie galezie zwracaja czas LOKALNY bez strefy.
+    Time zone stated explicitly, because the default behaviour DIFFERS:
+    DuckDB computes extract() in the session zone, BigQuery in UTC. Without
+    this macro the same code would give a different daily profile in dev and
+    in prod, and nobody would notice until someone compared the charts.
+    Both branches return LOCAL time without a zone.
   -#}
   {%- if target.type == 'bigquery' -%}
     datetime({{ col }}, '{{ var("timezone") }}')
@@ -73,7 +73,7 @@
 {%- endmacro %}
 
 {% macro any_true(col) -%}
-  {#- DuckDB ma bool_or, BigQuery uzywa logical_or -#}
+  {#- DuckDB has bool_or, BigQuery uses logical_or -#}
   {%- if target.type == 'bigquery' -%}
     logical_or({{ col }})
   {%- else -%}

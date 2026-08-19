@@ -27,7 +27,7 @@ class Detection:
 
     @property
     def feet(self) -> tuple[float, float]:
-        """Srodek dolnej krawedzi boxa."""
+        """The centre of the box's bottom edge."""
         x1, _y1, x2, y2 = self.xyxy
         return ((x1 + x2) / 2.0, y2)
 
@@ -53,22 +53,25 @@ class Detection:
 
 def resolve_device(requested: str) -> str:
     if requested != "auto":
+        log.info("Detection device (from config): %s", requested)
         return requested
+    device = "cpu"
     try:
         import torch
 
         if torch.backends.mps.is_available():
-            return "mps"
-        if torch.cuda.is_available():
-            return "cuda"
-    except Exception:  # noqa: BLE001
-        pass
-    return "cpu"
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Torch device probe failed (%s) - detection falls back to CPU", exc)
+    log.info("Detection device (auto-selected): %s", device)
+    return device
 
 
 class PersonDetector:
     def __init__(self, cfg: DetectionCfg) -> None:
-        from ultralytics import YOLO  # import leniwy - ciagnie torch (~kilka sekund)
+        from ultralytics import YOLO  # lazy import - pulls in torch (takes seconds)
 
         self.cfg = cfg
         self.device = resolve_device(cfg.device)

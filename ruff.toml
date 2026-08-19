@@ -1,0 +1,13 @@
+line-length = 100
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501",   # long lines in comments/strings are fine; formatter handles code
+  "SIM108", # ternary is not always clearer
+  "SIM117", # nested with statements are sometimes clearer
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]

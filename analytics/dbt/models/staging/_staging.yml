@@ -2,17 +2,15 @@ version: 2
 
 models:
   - name: stg_events
-    description: "Zdarzenia po oczyszczeniu: czas UTC i lokalny, kamera z JSON-a."
+    description: "Events after cleaning: UTC and local time, camera pulled from JSON."
     columns:
       - name: event_id
-        description: "Klucz glowny zdarzenia."
+        description: "Primary key of the event."
         tests: [unique, not_null]
       - name: camera
+        # no accepted_values here: camera names are free-form and deployment-specific
         tests:
           - not_null
-          - accepted_values:
-              arguments:
-                values: ["corridor", "street", "unknown"]
       - name: event_kind
         tests:
           - accepted_values:
@@ -22,7 +20,7 @@ models:
         tests: [not_null]
       - name: duration_s
         tests:
-          - dbt_utils_non_negative  # test wlasny, patrz macros/tests.sql
+          - dbt_utils_non_negative  # custom test, see macros/tests.sql
 
   - name: stg_crossings
     columns:
@@ -41,7 +39,7 @@ models:
                 values: ["in", "out"]
 
   - name: stg_minute_stats
-    description: "Agregaty minutowe; ziarno to para (kamera, minuta)."
+    description: "Per-minute aggregates; the grain is the (camera, minute) pair."
     columns:
       - name: minute_epoch
         tests: [not_null]

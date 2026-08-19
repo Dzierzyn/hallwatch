@@ -34,9 +34,6 @@ CREATE TABLE IF NOT EXISTS events (
     sample_weight REAL DEFAULT 1.0,
     meta          TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_events_started ON events(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_events_camera  ON events(camera, started_at DESC);
-
 CREATE TABLE IF NOT EXISTS crossings (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id  INTEGER,
@@ -45,8 +42,6 @@ CREATE TABLE IF NOT EXISTS crossings (
     direction TEXT,
     FOREIGN KEY(event_id) REFERENCES events(id)
 );
-CREATE INDEX IF NOT EXISTS idx_crossings_ts ON crossings(ts DESC);
-
 CREATE TABLE IF NOT EXISTS minute_stats (
     camera     TEXT NOT NULL DEFAULT '',
     minute     INTEGER NOT NULL,
@@ -57,6 +52,15 @@ CREATE TABLE IF NOT EXISTS minute_stats (
     count_out  INTEGER DEFAULT 0,
     PRIMARY KEY (camera, minute)
 );
+"""
+
+# Indexes live apart from the tables: on a database created by an older
+# version they may reference columns that only _migrate() adds, so they must
+# run AFTER migration - executescript(SCHEMA) alone would crash on open.
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_events_started ON events(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_camera  ON events(camera, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crossings_ts   ON crossings(ts DESC);
 """
 
 # columns added after the fact - migration for databases created earlier
@@ -99,6 +103,7 @@ class Store:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA)
             self._migrate()
+            self._conn.executescript(INDEXES)
             self._conn.commit()
 
     def _migrate(self) -> None:
@@ -123,8 +128,14 @@ class Store:
             cur = self._conn.execute(
                 "INSERT INTO events(camera, kind, started_at, sampled, sample_weight, meta) "
                 "VALUES(?,?,?,?,?,?)",
-                (camera, kind, started_at, int(sampled), sample_weight,
-                 json.dumps(meta or {}, ensure_ascii=False)),
+                (
+                    camera,
+                    kind,
+                    started_at,
+                    int(sampled),
+                    sample_weight,
+                    json.dumps(meta or {}, ensure_ascii=False),
+                ),
             )
             self._conn.commit()
             return int(cur.lastrowid or 0)
@@ -136,9 +147,7 @@ class Store:
             fields["meta"] = json.dumps(fields["meta"], ensure_ascii=False)
         cols = ", ".join(f"{k}=?" for k in fields)
         with self._lock:
-            self._conn.execute(
-                f"UPDATE events SET {cols} WHERE id=?", (*fields.values(), event_id)
-            )
+            self._conn.execute(f"UPDATE events SET {cols} WHERE id=?", (*fields.values(), event_id))
             self._conn.commit()
 
     def add_crossing(self, event_id: int | None, ts: float, track_id: int, direction: str) -> None:
@@ -150,8 +159,14 @@ class Store:
             self._conn.commit()
 
     def bump_minute(
-        self, ts: float, camera: str = "", frames: int = 0, motion: int = 0, persons: int = 0,
-        count_in: int = 0, count_out: int = 0,
+        self,
+        ts: float,
+        camera: str = "",
+        frames: int = 0,
+        motion: int = 0,
+        persons: int = 0,
+        count_in: int = 0,
+        count_out: int = 0,
     ) -> None:
         minute = int(ts // 60)
         with self._lock:

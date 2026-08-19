@@ -1,4 +1,4 @@
-"""Narzedzia pomocnicze: skanowanie sieci, test strumienia, edytor strefowy, selftest."""
+"""Helper tools: network scanning, stream testing, the zone editor, selftest."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import yaml
 
-from .capture import FrameSource, parse_source
+from .capture import FrameSource
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -28,18 +28,21 @@ CAMERA_PORTS = {
     37777: "Dahua",
 }
 
-# najczestsze sciezki RTSP wg producenta
+# most common RTSP paths by vendor
 RTSP_PATHS = {
     "Reolink": ["/h264Preview_01_main", "/h264Preview_01_sub"],
     "TP-Link Tapo": ["/stream1", "/stream2"],
     "Hikvision": ["/Streaming/Channels/101", "/Streaming/Channels/102"],
-    "Dahua / Imou": ["/cam/realmonitor?channel=1&subtype=0", "/cam/realmonitor?channel=1&subtype=1"],
+    "Dahua / Imou": [
+        "/cam/realmonitor?channel=1&subtype=0",
+        "/cam/realmonitor?channel=1&subtype=1",
+    ],
     "ONVIF (generic)": ["/onvif1", "/live/ch00_0", "/videoMain"],
 }
 
 
 def local_subnet() -> str | None:
-    """Zwraca prefiks /24 aktywnego interfejsu, np. '192.168.1'."""
+    """Returns the /24 prefix of the active interface, e.g. '192.168.1'."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -58,13 +61,13 @@ def _probe_port(host: str, port: int, timeout: float = 0.4) -> bool:
 
 
 def scan_network(subnet: str | None = None) -> list[tuple[str, list[str]]]:
-    """Szuka w LAN hostow z otwartymi portami kamerowymi."""
+    """Searches the LAN for hosts with open camera ports."""
     subnet = subnet or local_subnet()
     if not subnet:
-        print("Nie moge ustalic podsieci - podaj ja: hallwatch scan --subnet 192.168.1")
+        print("Cannot determine the subnet - pass it explicitly: hallwatch scan --subnet 192.168.1")
         return []
 
-    print(f"Skanuje {subnet}.1-254 na portach {', '.join(map(str, CAMERA_PORTS))} ...\n")
+    print(f"Scanning {subnet}.1-254 on ports {', '.join(map(str, CAMERA_PORTS))} ...\n")
     hosts = [f"{subnet}.{i}" for i in range(1, 255)]
     found: list[tuple[str, list[str]]] = []
 
@@ -84,41 +87,62 @@ def scan_network(subnet: str | None = None) -> list[tuple[str, list[str]]]:
     else:
         print("\nOnce you know the camera IP, check the RTSP paths:")
         for vendor, paths in RTSP_PATHS.items():
-            print(f"  {vendor:<18} rtsp://user:haslo@IP:554{paths[0]}")
-        print("\nPotem: hallwatch probe --source 'rtsp://user:haslo@IP:554/...'")
+            print(f"  {vendor:<18} rtsp://user:password@IP:554{paths[0]}")
+        print("\nThen: hallwatch probe --source 'rtsp://user:password@IP:554/...'")
     return found
 
 
 def ffprobe_info(source: str) -> str:
     try:
         out = subprocess.run(
-            ["ffprobe", "-hide_banner", "-rtsp_transport", "tcp", "-show_streams",
-             "-show_format", "-of", "default=noprint_wrappers=1", source],
-            capture_output=True, text=True, timeout=25,
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-rtsp_transport",
+                "tcp",
+                "-show_streams",
+                "-show_format",
+                "-of",
+                "default=noprint_wrappers=1",
+                source,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
         )
         return out.stdout or out.stderr
     except Exception as exc:  # noqa: BLE001
-        return f"ffprobe nieudany: {exc}"
+        return f"ffprobe failed: {exc}"
 
 
 def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> bool:
     """Checks that the source works: prints its parameters and measures real FPS."""
-    print(f"== Zrodlo: {source}\n")
+    print(f"== Source: {source}\n")
 
     if str(source).lower().startswith("rtsp://"):
         info = ffprobe_info(source)
-        keys = ("codec_name", "codec_type", "width", "height", "r_frame_rate", "bit_rate",
-                "sample_rate", "channels")
+        keys = (
+            "codec_name",
+            "codec_type",
+            "width",
+            "height",
+            "r_frame_rate",
+            "bit_rate",
+            "sample_rate",
+            "channels",
+        )
         lines = [ln for ln in info.splitlines() if ln.split("=")[0] in keys]
         if lines:
-            print("Strumienie wg ffprobe:")
+            print("Streams according to ffprobe:")
             for ln in lines:
                 print("  " + ln)
             has_audio = any("codec_type=audio" in ln for ln in info.splitlines())
-            print(f"\n  audio w strumieniu: {'TAK' if has_audio else 'NIE'}"
-                  f"{'' if has_audio else '  (audio detection will be inactive)'}")
+            print(
+                f"\n  audio in the stream: {'YES' if has_audio else 'NO'}"
+                f"{'' if has_audio else '  (audio detection will be inactive)'}"
+            )
         else:
-            print("ffprobe nie zwrocil informacji o strumieniach:\n" + info[:800])
+            print("ffprobe returned no stream information:\n" + info[:800])
         print()
 
     try:
@@ -151,22 +175,28 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
         print("ERROR: zero frames. Check the login/password and the RTSP path.")
         return False
     if src.live:
-        print(f"OK: {frames} klatek w {elapsed:.1f}s -> {frames/elapsed:.1f} FPS realnie, "
-              f"rozdzielczosc {shape[1]}x{shape[0]}")
+        print(
+            f"OK: {frames} frames in {elapsed:.1f}s -> {frames / elapsed:.1f} FPS measured, "
+            f"resolution {shape[1]}x{shape[0]}"
+        )
         if src.native_fps:
             print(f"    FPS declared by the source: {src.native_fps:.1f}")
         if src.native_fps and frames / elapsed < src.native_fps * 0.6:
-            print("    WARNING: real FPS well below the declared one, weak Wi-Fi "
-                  "or too large a stream. Consider the camera substream.")
+            print(
+                "    WARNING: real FPS well below the declared one, weak Wi-Fi "
+                "or too large a stream. Consider the camera substream."
+            )
     else:
         # a file is read as fast as the disk allows, so an FPS measurement means nothing here
-        print(f"OK: file read, {frames} frames, resolution {shape[1]}x{shape[0]}, "
-              f"file FPS {src.native_fps:.1f}")
+        print(
+            f"OK: file read, {frames} frames, resolution {shape[1]}x{shape[0]}, "
+            f"file FPS {src.native_fps:.1f}"
+        )
     return True
 
 
 # ---------------------------------------------------------------------------
-# Edytor stref
+# Zone editor
 # ---------------------------------------------------------------------------
 HELP = """
   LEFT-click to add points.
@@ -201,17 +231,17 @@ class ZoneEditor:
     def commit(self) -> None:
         need = 2 if self.mode == "line" else 3
         if len(self.points) < need:
-            print(f"  potrzebne min. {need} punkty dla '{self.mode}'")
+            print(f"  need at least {need} points for '{self.mode}'")
             return
         if self.mode == "line":
             self.line = self._norm(self.points)  # type: ignore[assignment]
             print(f"  line: {self.line}")
         elif self.mode == "zone":
-            name = f"zone-{len(self.zones)+1}"
+            name = f"zone-{len(self.zones) + 1}"
             self.zones.append({"name": name, "polygon": self._norm(self.points)})
             print(f"  zone '{name}' ({len(self.points)} pts)")
         else:
-            name = f"mask-{len(self.masks)+1}"
+            name = f"mask-{len(self.masks) + 1}"
             self.masks.append(
                 {"name": name, "polygon": self._norm(self.points), "mode": "blur", "strength": 35}
             )
@@ -229,20 +259,42 @@ class ZoneEditor:
         for z in self.zones:
             pts = np.array([[p[0] * self.w, p[1] * self.h] for p in z["polygon"]], np.int32)
             cv2.polylines(canvas, [pts], True, self.COLORS["zone"], 2)
-            cv2.putText(canvas, z["name"], tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        self.COLORS["zone"], 1, cv2.LINE_AA)
+            cv2.putText(
+                canvas,
+                z["name"],
+                tuple(pts[0]),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                self.COLORS["zone"],
+                1,
+                cv2.LINE_AA,
+            )
         if self.line:
             pts = [(int(p[0] * self.w), int(p[1] * self.h)) for p in self.line]
             cv2.line(canvas, pts[0], pts[1], self.COLORS["line"], 2, cv2.LINE_AA)
         for p in self.points:
             cv2.circle(canvas, p, 4, self.COLORS[self.mode], -1, cv2.LINE_AA)
         if len(self.points) > 1:
-            cv2.polylines(canvas, [np.array(self.points, np.int32)], False,
-                          self.COLORS[self.mode], 1, cv2.LINE_AA)
+            cv2.polylines(
+                canvas,
+                [np.array(self.points, np.int32)],
+                False,
+                self.COLORS[self.mode],
+                1,
+                cv2.LINE_AA,
+            )
         cv2.rectangle(canvas, (0, 0), (self.w, 28), (20, 20, 20), -1)
-        cv2.putText(canvas, f"mode: {self.mode}  points: {len(self.points)}  "
-                            f"[1/2/3 mode, ENTER ok, u undo, s save, q quit]",
-                    (10, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (230, 230, 230), 1, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            f"mode: {self.mode}  points: {len(self.points)}  "
+            f"[1/2/3 mode, ENTER ok, u undo, s save, q quit]",
+            (10, 19),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            (230, 230, 230),
+            1,
+            cv2.LINE_AA,
+        )
         return canvas
 
     def as_yaml(self) -> str:
@@ -260,10 +312,10 @@ class ZoneEditor:
 def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None) -> None:
     prof = cfg.camera(camera)
     source = source or prof.source
-    print(f"Camera '{prof.name}', zrodlo: {source}")
+    print(f"Camera '{prof.name}', source: {source}")
     src = FrameSource(source, width=prof.width).start()
     frame = None
-    for _ in range(60):  # kilka klatek na rozgrzanie autoexpozycji
+    for _ in range(60):  # a few frames to let auto-exposure warm up
         frame, _ = src.read(timeout=6.0)
         if frame is not None:
             break
@@ -274,7 +326,7 @@ def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None
 
     print(HELP)
     editor = ZoneEditor(frame)
-    win = "HallWatch - edytor stref"
+    win = "HallWatch - zone editor"
     cv2.namedWindow(win)
     cv2.setMouseCallback(win, editor.on_mouse)
 
@@ -286,18 +338,21 @@ def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None
         if key in ZoneEditor.MODES:
             editor.mode = ZoneEditor.MODES[key]
             editor.points = []
-            print(f"  tryb: {editor.mode}")
+            print(f"  mode: {editor.mode}")
         elif key in (13, 10):
             editor.commit()
         elif key == ord("u") and editor.points:
             editor.points.pop()
         elif key == ord("c"):
             editor.points, editor.line, editor.zones, editor.masks = [], None, [], []
-            print("  wyczyszczono")
+            print("  cleared")
         elif key == ord("s"):
             out = cfg.root / f"zones.{prof.slug}.yaml"
             out.write_text(editor.as_yaml(), encoding="utf-8")
-            print(f"\n  saved {out}\n  Paste 'counting' and 'privacy' under the camera entry '{prof.name}' w config.yaml:\n")
+            print(
+                f"\n  saved {out}\n  Paste 'counting' and 'privacy' under the camera "
+                f"entry '{prof.name}' in config.yaml:\n"
+            )
             print(editor.as_yaml())
     cv2.destroyAllWindows()
 
@@ -315,8 +370,8 @@ def make_test_video(path: Path, seconds: float = 10.0, fps: int = 12) -> Path:
     rng = np.random.default_rng(7)
     for i in range(total):
         frame = np.full((h, w, 3), 90, np.uint8)
-        frame += rng.integers(0, 6, (h, w, 3), dtype=np.uint8)  # szum czujnika
-        if i > fps * 2:  # obiekt wjezdza po 2 s
+        frame += rng.integers(0, 6, (h, w, 3), dtype=np.uint8)  # sensor noise
+        if i > fps * 2:  # the object enters after 2 s
             x = int((i - fps * 2) * 8) % (w + 120) - 60
             cv2.rectangle(frame, (x, 150), (x + 55, 300), (225, 225, 225), -1)
         writer.feed(frame, i / fps)
@@ -365,8 +420,9 @@ def make_person_video(path: Path, detector: object, seconds: float = 8.0, fps: i
 
 
 def selftest(cfg: Config) -> bool:
-    """Sprawdza detektor, nagrywanie, caly pipeline i logike liczenia osob."""
+    """Checks the detector, recording, the whole pipeline and the counting logic."""
     from .pipeline import Pipeline
+    from .recorder import ffmpeg_available
 
     ok = True
 
@@ -389,12 +445,19 @@ def selftest(cfg: Config) -> bool:
         print(f"   ERROR: {exc}")
         return False
 
+    if not ffmpeg_available():
+        print(
+            "\nffmpeg not found - install it (macOS: brew install ffmpeg | "
+            "Debian/Ubuntu: sudo apt install ffmpeg | Windows: winget install ffmpeg)"
+        )
+        return False
+
     print("\n== 2/4 Recording (ffmpeg -> H.264)")
     tmp = cfg.path("data/selftest")
     tmp.mkdir(parents=True, exist_ok=True)
     video = make_test_video(tmp / "synthetic.mp4")
     if video.exists() and video.stat().st_size > 1000:
-        print(f"   OK: {video.name}, {video.stat().st_size/1024:.0f} kB")
+        print(f"   OK: {video.name}, {video.stat().st_size / 1024:.0f} kB")
     else:
         print("   ERROR: could not write the test video")
         return False
@@ -410,6 +473,10 @@ def selftest(cfg: Config) -> bool:
         cam.privacy.masks = []
         cam.recording.dir = f"data/selftest/clips-{tag}"
         cam.recording.post_roll_s = 1.0
+        # The counting regression must not depend on the user's config: force
+        # the line the synthetic person video is built to cross exactly once.
+        cam.counting.line = ((0.08, 0.62), (0.92, 0.62))
+        cam.counting.anchor = "feet"
         test_cfg.cameras = [cam]
         test_cfg.notify.enabled = False
         test_cfg.cloud.enabled = False
@@ -463,11 +530,13 @@ def selftest(cfg: Config) -> bool:
             ok = False
         else:
             ev = person_events[0]
-            print(f"   OK: event #{ev.id}, max people {ev.max_persons}, "
-                  f"in={ev.count_in} out={ev.count_out}, thumbnail {ev.snapshot_path}")
+            print(
+                f"   OK: event #{ev.id}, max people {ev.max_persons}, "
+                f"in={ev.count_in} out={ev.count_out}, thumbnail {ev.snapshot_path}"
+            )
     except Exception as exc:  # noqa: BLE001
         print(f"   ERROR: {exc}")
         ok = False
 
-    print("\n" + ("EVERYTHING WORKS" if ok else "SA PROBLEMY - patrz wyzej"))
+    print("\n" + ("ALL CHECKS PASSED" if ok else "PROBLEMS FOUND - see above"))
     return ok
