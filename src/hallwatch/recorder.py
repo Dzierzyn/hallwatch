@@ -1,9 +1,10 @@
-"""Nagrywanie zdarzen z pre-rollem (bufor pierscieniowy) do H.264 przez ffmpeg.
+"""Event recording with pre-roll (a ring buffer) to H.264 through ffmpeg.
 
-Kluczowa cecha: gdy pipeline stwierdzi zdarzenie, moment jego POCZATKU jest juz
-przeszlosci. Dlatego kazda klatka ladauje najpierw w buforze pierscieniowym o
-dlugosci pre_roll_s - i gdy zapada decyzja o nagraniu, bufor jest wylewany do
-pliku. Efekt: na klipie widac, jak ktos wchodzi, a nie doklejke od polowy.
+The key property: by the time the pipeline decides an event has happened, the moment
+it BEGAN is already in the past. That is why every frame first lands in a ring buffer
+of length pre_roll_s, and when the decision to record is made the buffer is flushed
+to file. The effect: the clip shows someone walking in, rather than a fragment
+starting halfway through.
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ class ClipWriter:
         )
 
     def feed(self, frame: np.ndarray, ts: float) -> None:
-        """Zapisuje klatke, powtarzajac ja jesli trzeba, by czas klipu = czas realny."""
+        """Writes a frame, repeating it if needed so that clip time matches real time."""
         if self.proc.poll() is not None or self.proc.stdin is None:
             return
         if frame.shape[1] != self.width or frame.shape[0] != self.height:
@@ -69,7 +70,7 @@ class ClipWriter:
             needed = 1
         else:
             target = int((ts - self.start_ts) / self.frame_interval) + 1
-            needed = min(max(target - self.frames_written, 1), 4)  # cap: nie puchnij przy zwiechach
+            needed = min(max(target - self.frames_written, 1), 4)  # cap: do not grow during stalls
 
         data = frame.tobytes()
         try:
@@ -95,7 +96,7 @@ class ClipWriter:
             self.proc.kill()
             self.proc.wait(timeout=5)
         if self.frames_written == 0 or not self.path.exists() or self.path.stat().st_size == 0:
-            log.warning("Klip pusty, usuwam: %s (%s)", self.path.name, err[:200] if err else "")
+            log.warning("Clip empty, removing: %s (%s)", self.path.name, err[:200] if err else "")
             self.path.unlink(missing_ok=True)
             return None
         return self.path
@@ -114,14 +115,14 @@ class EventRecorder:
         self._started_at: float = 0.0
         self.enabled = cfg.enabled and ffmpeg_available()
         if cfg.enabled and not self.enabled:
-            log.error("Nagrywanie wylaczone: brak ffmpeg w PATH")
+            log.error("Recording disabled: ffmpeg not found in PATH")
 
     @property
     def active(self) -> bool:
         return self._writer is not None or self._pending is not None
 
     def push(self, frame: np.ndarray, ts: float) -> None:
-        """Wolane dla KAZDEJ klatki: karmi bufor pierscieniowy i aktywny klip."""
+        """Called for EVERY frame: feeds the ring buffer and the active clip."""
         if not self.enabled:
             return
         if self._writer is None:
@@ -135,11 +136,11 @@ class EventRecorder:
         if self._writer.duration_s >= self.cfg.max_clip_s:
             log.info("Klip osiagnal max_clip_s - domykam i zaczynam nastepny segment")
             self.stop()
-            self._pending = (ts, False)  # nowy segment startuje od nastepnej klatki
+            self._pending = (ts, False)  # a new segment starts from the next frame
 
     def start(self, ts: float, use_preroll: bool = True) -> None:
-        """Zglasza chec nagrywania. Writer powstaje przy pierwszej klatce,
-        bo dopiero ona zna wymiary kadru."""
+        """Requests recording. The writer is created on the first frame,
+        because only then are the frame dimensions known."""
         if not self.enabled or self._writer is not None or self._pending is not None:
             return
         self._pending = (ts, use_preroll)
@@ -158,7 +159,7 @@ class EventRecorder:
         for f, fts in frames:
             self._writer.feed(f, fts)
         self._ring.clear()
-        log.info("Start nagrywania: %s (pre-roll %d klatek)", path.name, len(frames))
+        log.info("Recording started: %s (pre-roll %d frames)", path.name, len(frames))
 
     def stop(self) -> Path | None:
         self._pending = None

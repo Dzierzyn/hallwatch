@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# HallWatch - konfiguracja wielokamerowa
+# HallWatch - multi-camera configuration
 #
-# `defaults` opisuje zachowanie wspolne, `cameras` liste kamer. Kazda kamera
-# nadpisuje tylko to, czym naprawde sie rozni. Wspolrzedne linii, stref i masek
-# sa ZNORMALIZOWANE do 0..1, wiec przezywaja zmiane rozdzielczosci.
-# Wyznacz je klikaniem:  hallwatch zones --camera korytarz
+# `defaults` describes shared behaviour, `cameras` the list of cameras. Each one
+# overrides only what genuinely differs. Line, zone and mask coordinates are
+# NORMALISED to 0..1, so they survive a change of resolution.
+# Define them by clicking:  hallwatch zones --camera corridor
 # ---------------------------------------------------------------------------
 
 defaults:
@@ -14,7 +14,7 @@ defaults:
   mode: "continuous" # continuous | on_demand | sampling
 
   detection:
-    model: "yolo11n.pt" # n=najszybszy, s/m=dokladniejsze
+    model: "yolo11n.pt" # n=fastest, s/m=more accurate
     device: "auto" # auto | mps | cuda | cpu
     conf: 0.40
     iou: 0.50
@@ -32,7 +32,7 @@ defaults:
 
   recording:
     enabled: true
-    dir: "data/clips" # kazda kamera dostaje podkatalog ze swoim slugiem
+    dir: "data/clips" # each camera gets a subdirectory named after its slug
     pre_roll_s: 4.0
     post_roll_s: 6.0
     max_clip_s: 120
@@ -43,31 +43,31 @@ defaults:
     retention_days: 14
 
   audio:
-    enabled: false # dziala tylko dla RTSP ze sciezka audio
+    enabled: false # works only for RTSP with an audio track
     trigger_dbfs: -34.0
     release_dbfs: -40.0
     min_event_s: 0.4
 
 cameras:
   # -------------------------------------------------------------------------
-  - name: "korytarz"
-    # Kamera na baterii przez Reolink Home Hub. Tryb on_demand nie trzyma
-    # otwartego RTSP - laczy sie na sygnal i pozwala kamerze zasnac.
-    #   curl -X POST 'http://127.0.0.1:8000/api/wake?camera=korytarz'
-    source: "0" # docelowo: rtsp://user:haslo@IP-HUBA:554/...
+  - name: "corridor"
+    # A battery camera behind a Reolink Home Hub. on_demand mode does not hold
+    # RTSP open: it connects on a signal and lets the camera sleep.
+    #   curl -X POST 'http://127.0.0.1:8000/api/wake?camera=corridor'
+    source: "0" # target: rtsp://user:password@HUB-IP:554/...
     mode: "on_demand"
     session_seconds: 90
     session_idle_s: 20
     watch_hold_s: 25
     watch_max_s: 600
-    # active_hours: "06:00-23:00"   # odkomentuj, by oszczedzic bateria nocą
+    # active_hours: "06:00-23:00"   # uncomment to save battery at night
 
     detection:
       classes: [0] # 0 = person (COCO)
 
     counting:
-      # feet - kamera patrzy skosem w dol korytarza (tak trzeba przy PIR)
-      # center - gdyby patrzyla prosto w dol z sufitu
+      # feet - camera looking down the corridor at an angle (what PIR mounting needs)
+      # center - if it looked straight down from the ceiling
       anchor: "feet"
       line: [[0.08, 0.62], [0.92, 0.62]]
       direction_labels:
@@ -78,39 +78,39 @@ cameras:
           polygon: [[0.05, 0.30], [0.48, 0.30], [0.48, 0.97], [0.05, 0.97]]
 
     privacy:
-      # Puste = nic nie jest zaslaniane. Kadr obejmuje wlasne drzwi, wiec maski
-      # nie sa potrzebne. Gdyby kadru nie dalo sie ograniczyc:
-      #   - name: "obszar-obcy"
+      # Empty = nothing is masked. The frame covers our own door, so masks are
+      # not needed. If the frame could not be constrained:
+      #   - name: "neighbours-area"
       #     polygon: [[0.62, 0.22], [0.99, 0.22], [0.99, 0.92], [0.62, 0.92]]
       #     mode: "blur"
       masks: []
 
   # -------------------------------------------------------------------------
-  - name: "ulica"
-    # Kamera balkonowa liczaca pojazdy. Statystyki ruchu nie moga opierac sie
-    # na PIR - przegapilby wiekszosc aut i liczby nie znaczylyby nic. Zamiast
-    # tego probkujemy: 5 minut co godzine, czyli widzimy 8,3% czasu, a kazde
-    # zdarzenie niesie mnoznik do ekstrapolacji.
-    source: "0" # docelowo: rtsp://user:haslo@IP-HUBA:554/...
+  - name: "street"
+    # A balcony camera counting vehicles. Traffic statistics cannot rest on PIR:
+    # it would miss most cars and the numbers would mean nothing. Instead we
+    # sample: 5 minutes every hour, so we see 8.3% of the time, and every event
+    # carries a multiplier for extrapolation.
+    source: "0" # target: rtsp://user:password@HUB-IP:554/...
     mode: "sampling"
     sampling:
       every_minutes: 60
       seconds: 300
-      align_to_clock: true # okna o rownej godzinie => probki porownywalne miedzy dobami
+      align_to_clock: true # windows on the hour => samples comparable across days
 
     detection:
       # 2=car 3=motorcycle 5=bus 7=truck
       classes: [2, 3, 5, 7]
-      # widok z gory/skosu na ulice jest trudniejszy niz ujecia z COCO
+      # a top-down or angled street view is harder than the shots in COCO
       conf: 0.30
 
     motion:
-      # ulica rusza sie caly czas - bramka ruchu nic tu nie oszczedza,
-      # a moglaby zgubic auto wjezdzajace w kadr powoli
+      # the street moves constantly: a motion gate saves nothing here and could
+      # miss a car entering the frame slowly
       enabled: false
 
     counting:
-      anchor: "center" # pojazdy z gory to plamy, srodek jest stabilniejszy
+      anchor: "center" # vehicles from above are blobs, the centre is more stable
       line: [[0.05, 0.55], [0.95, 0.55]]
       direction_labels:
         positive: "w-prawo"
@@ -118,8 +118,8 @@ cameras:
       zones: []
 
     recording:
-      # Liczymy pojazdy, nie archiwizujemy ulicy. Statystyki ida do bazy,
-      # wideo nie zostaje - mniej danych do obrony i mniejsza karta.
+      # We count vehicles, we do not archive the street. Statistics go to the
+      # database, video does not stay: less data to defend and a smaller card.
       enabled: false
 
     privacy:
@@ -130,12 +130,12 @@ storage:
 
 cloud:
   enabled: false
-  endpoint_url: "" # np. https://<account>.r2.cloudflarestorage.com
+  endpoint_url: "" # e.g. https://<account>.r2.cloudflarestorage.com
   bucket: ""
   prefix: "hallwatch"
   region: "auto"
   delete_local_after_upload: false
-  # klucze z env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
+  # keys from env: HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET
 
 notify:
   enabled: false

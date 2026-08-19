@@ -1,8 +1,7 @@
-"""Rysowanie nakladki: boxy, sledzone trajektorie, linia zliczajaca, strefy, HUD.
+"""Overlay drawing: boxes, tracked paths, the counting line, zones and the HUD.
 
-Uwaga: cv2.putText obsluguje tylko ASCII (fonty Hershey), dlatego wszystkie
-etykiety w overlayu sa bez polskich znakow. Interfejs webowy nie ma tego
-ograniczenia.
+Note: cv2.putText supports ASCII only (Hershey fonts), which is why every label in
+the overlay avoids non-ASCII characters. The web interface has no such limitation.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 def _color_for_id(track_id: int | None) -> tuple[int, int, int]:
     if track_id is None:
         return GREY
-    # deterministyczny, dobrze rozrozniajacy sie kolor per track
+    # deterministic, well-separated colour per track
     h = (track_id * 47) % 180
     hsv = np.uint8([[[h, 200, 255]]])
     bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]

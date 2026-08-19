@@ -1,8 +1,8 @@
-"""Maski prywatnosci - nakladane na klatke PRZED nagraniem/streamem/uploadem.
+"""Privacy masks, applied to the frame BEFORE recording, streaming and upload.
 
-To nie jest ozdoba: obszary, ktore nie naleza do wlasciciela systemu
-powinny nigdy nie trafic na dysk ani do chmury. Maska aplikowana jest u zrodla
-pipeline'u, wiec kazdy dalszy konsument dostaje juz zaslonieta klatke.
+This is not decoration: areas that do not belong to the system's owner should never
+reach disk or the cloud. The mask is applied at the source of the pipeline, so every
+downstream consumer already receives a masked frame.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class PrivacyMasker:
         return self._cache[key]
 
     def apply(self, frame: np.ndarray) -> np.ndarray:
-        """Zwraca klatke z nalozonymi maskami (in-place na kopii wejscia)."""
+        """Returns the frame with masks applied (in place, on a copy of the input)."""
         if not self.masks:
             return frame
         out = frame
@@ -66,7 +66,7 @@ class PrivacyMasker:
                 )
                 blurred = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
             else:  # blur
-                k = int(cfg.strength) | 1  # kernel musi byc nieparzysty
+                k = int(cfg.strength) | 1  # the kernel has to be odd
                 blurred = cv2.GaussianBlur(roi, (k, k), 0)
 
             sub_mask = mask[y : y + h, x : x + w] > 0

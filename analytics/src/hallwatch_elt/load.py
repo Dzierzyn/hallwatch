@@ -1,17 +1,16 @@
-"""Load: Parquet -> GCS -> BigQuery jako tabele ZEWNETRZNE.
+"""Load: Parquet -> GCS -> BigQuery as EXTERNAL tables.
 
-Decyzja architektoniczna. Zamiast wgrywac wiersze do tabel natywnych,
-wystawiamy nad plikami w GCS tabele zewnetrzne z partycjonowaniem Hive.
-Powody:
+An architectural decision. Instead of loading rows into native tables, we expose
+external tables with Hive partitioning over the files in GCS. Reasons:
 
-  * idempotentnosc z definicji - ponowne uruchomienie nadpisuje pliki, a nie
-    dokleja wierszy. Przy zwyklym WRITE_APPEND kazdy retry Airflowa
-    duplikowalby dane, i to cicho.
-  * symetria z dev - lokalnie DuckDB czyta te same pliki Parquet wprost.
-    Ten sam uklad w obu srodowiskach oznacza mniej niespodzianek na produkcji.
-  * koszt - placimy za skan, nie za magazyn w BigQuery.
+  * idempotency by construction: a rerun overwrites files rather than appending
+    rows. With a plain WRITE_APPEND every Airflow retry would duplicate data,
+    and would do it silently.
+  * symmetry with dev: locally DuckDB reads the same Parquet files directly.
+    The same layout in both environments means fewer surprises in production.
+  * cost: we pay for scanning, not for storage inside BigQuery.
 
-W dev ta warstwa nic nie robi: DuckDB siega do plikow bezposrednio.
+In dev this layer does nothing, because DuckDB reaches for the files directly.
 """
 
 from __future__ import annotations
@@ -47,10 +46,10 @@ def sync_to_gcs(cfg: Settings | None = None) -> int:
             rel = path.relative_to(local_root).as_posix()  # dt=YYYY-MM-DD/part-...
             blob = bucket.blob(f"{_gcs_prefix(cfg, table)}{rel}")
             if blob.exists() and blob.size == path.stat().st_size:
-                continue  # juz tam jest, nie placmy za transfer drugi raz
+                continue  # already there, no need to pay for the transfer twice
             blob.upload_from_filename(str(path))
             uploaded += 1
-    log.info("GCS: wyslano %d nowych plikow do gs://%s", uploaded, cfg.gcs_bucket)
+    log.info("GCS: uploaded %d new files to gs://%s", uploaded, cfg.gcs_bucket)
     return uploaded
 
 
@@ -63,7 +62,7 @@ def ensure_datasets(cfg: Settings | None = None) -> None:
         ds = bigquery.Dataset(f"{cfg.gcp_project}.{cfg.bq_dataset}_{suffix}")
         ds.location = cfg.bq_location
         client.create_dataset(ds, exists_ok=True)
-        log.info("Dataset gotowy: %s_%s", cfg.bq_dataset, suffix)
+        log.info("Dataset ready: %s_%s", cfg.bq_dataset, suffix)
 
 
 def create_external_tables(cfg: Settings | None = None) -> list[str]:
@@ -80,12 +79,12 @@ def create_external_tables(cfg: Settings | None = None) -> list[str]:
         ext.source_uris = [f"{uri_prefix}*"]
         hive = bigquery.HivePartitioningOptions()
         hive.mode = "AUTO"                    # typ kolumny dt wykryty automatycznie
-        hive.source_uri_prefix = uri_prefix   # wszystko po tym prefiksie to partycje
+        hive.source_uri_prefix = uri_prefix   # everything after this prefix is a partition
         ext.hive_partitioning = hive
         ext.autodetect = True
 
         table_id = f"{cfg.gcp_project}.{cfg.bq_dataset}_raw.{table}"
-        try:  # podmieniamy definicje, gdyby zmienil sie schemat
+        try:  # replace the definition in case the schema changed
             client.delete_table(table_id)
         except NotFound:
             pass

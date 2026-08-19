@@ -1,15 +1,15 @@
-"""Generator realistycznej historii dla dema i testow ML.
+"""Generator of realistic history for the demo and for ML tests.
 
-Bez tego caly stos analityczny nie ma czego liczyc: swiezy pipeline CV ma pusta
-baze, a na plaskim szumie model nie pokaze niczego ciekawego. Generujemy wiec
-ruch z prawdziwymi wzorcami, ktore model MA szanse odkryc:
+Without it the whole analytics stack has nothing to compute: a fresh CV pipeline
+has an empty database, and on flat noise a model shows nothing interesting. So we
+generate traffic with real patterns that the model HAS a chance of discovering:
 
-  - dobowy rytm (szczyt poranny i popoludniowy, martwa noc)
-  - tygodniowy (weekend inny niz dni robocze)
-  - swieta i anomalie (impreza u sasiada, korek na ulicy)
-  - szum Poissona, bo zliczenia sa dyskretne i losowe
+  - a daily rhythm (morning and afternoon peaks, a dead night)
+  - a weekly one (weekends differ from weekdays)
+  - holidays and anomalies (a party next door, a traffic jam on the street)
+  - Poisson noise, because counts are discrete and random
 
-Dane sa syntetyczne i tak opisane - to material demonstracyjny, nie pomiar.
+The data is synthetic and labelled as such: demonstration material, not measurement.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# profil dobowy: mnoznik natezenia na kazda godzine (0-23)
+# daily profile: an intensity multiplier for each hour (0-23)
 CORRIDOR_WEEKDAY = [
     0.02, 0.01, 0.01, 0.01, 0.03, 0.15, 0.55, 1.00, 0.85, 0.45, 0.35, 0.40,
     0.45, 0.40, 0.40, 0.55, 0.85, 1.00, 0.90, 0.70, 0.50, 0.35, 0.18, 0.06,
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS minute_stats (
 
 
 def _profile(camera: str, is_weekend: bool) -> list[float]:
-    if camera == "ulica":
+    if camera == "street":
         return STREET_WEEKEND if is_weekend else STREET_WEEKDAY
     return CORRIDOR_WEEKEND if is_weekend else CORRIDOR_WEEKDAY
 
@@ -78,7 +78,7 @@ def generate(
     """Tworzy baze SQLite w schemacie HallWatch z syntetyczna historia."""
     rng = np.random.default_rng(seed)
     # wzorce dobowe budujemy w czasie LOKALNYM - "szczyt o 7 rano" ma znaczyc
-    # 7 rano u mieszkanca, a nie 7 UTC. Do bazy i tak leci epoch.
+    # 7 a.m. for the resident, not 7 UTC. Epoch goes into the database anyway.
     local = ZoneInfo(tz)
     end = end or datetime.now(local).replace(minute=0, second=0, microsecond=0)
     start = end - timedelta(days=days)
@@ -90,13 +90,13 @@ def generate(
     conn.executescript(SCHEMA)
 
     # (nazwa, kind, bazowe natezenie/h, srednia dlugosc s, duty_cycle)
-    # Ulica pracuje w trybie probkowania: obserwujemy 5 minut na godzine, wiec
-    # ZAPISUJEMY tylko ta czesc ruchu, ktora naprawde bylo widac, i doklejamy
-    # wage 1/duty do ekstrapolacji. Dzieki temu warstwa analityczna ma szanse
-    # odtworzyc prawdziwe natezenie, a demo nie klamie o tym, co widziano.
+    # The street runs in sampling mode: we observe 5 minutes per hour, so we
+    # RECORD only the portion of traffic that was actually seen, and attach
+    # a 1/duty weight for extrapolation. That gives the analytics layer a chance
+    # to reconstruct the true rate, and the demo does not lie about what was seen.
     cameras = [
-        ("korytarz", "person", 3.2, 22.0, 1.0),
-        ("ulica", "vehicle", 38.0, 9.0, 5.0 / 60.0),
+        ("corridor", "person", 3.2, 22.0, 1.0),
+        ("street", "vehicle", 38.0, 9.0, 5.0 / 60.0),
     ]
 
     events: list[tuple] = []
@@ -114,14 +114,14 @@ def generate(
         for camera, kind, base_rate, mean_dur, duty in cameras:
             rate = base_rate * _profile(camera, is_weekend)[hod]
 
-            # anomalie: rzadkie, ale wyrazne - material dla detektora
+            # anomalies: rare but pronounced, material for the detector
             anomaly = 1.0
             if rng.random() < 0.004:  # ~ raz na 10 dni na kamere
                 anomaly = rng.uniform(3.0, 6.0)
-            # sezonowa fala tygodniowa, zeby model mial czego sie uczyc poza doba
+            # a weekly seasonal wave, so the model has something beyond the daily cycle
             rate *= 1.0 + 0.12 * math.sin(2 * math.pi * h / (24 * 7))
 
-            # obserwujemy tylko duty * godzine, wiec tyle zdarzen widzimy
+            # we observe only duty * hour, so that is how many events we see
             n_events = rng.poisson(max(0.001, rate * anomaly * duty))
             sampled = duty < 1.0
             weight = 1.0 / duty
@@ -142,7 +142,7 @@ def generate(
                 c_out = int(rng.binomial(n_obj, lean_out))
                 c_in = n_obj - c_out
 
-                has_media = kind == "person"  # ulicy nie archiwizujemy
+                has_media = kind == "person"  # the street is not archived
                 events.append((
                     event_id, camera, kind, started, ended, n_obj, c_in, c_out,
                     float(rng.uniform(-52, -28)) if rng.random() < 0.25 else None,
@@ -152,7 +152,7 @@ def generate(
                     json.dumps({"mode": "sampling" if sampled else "on_demand"}, ensure_ascii=False),
                 ))
 
-                for direction, count in (("wejscie", c_in), ("wyjscie", c_out)):
+                for direction, count in (("in", c_in), ("out", c_out)):
                     for _ in range(count):
                         track_id += 1
                         crossings.append((

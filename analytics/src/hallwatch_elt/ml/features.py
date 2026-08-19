@@ -1,10 +1,10 @@
-"""Inzynieria cech dla prognozy ruchu godzinowego.
+"""Feature engineering for the hourly traffic forecast.
 
-Decyzja projektowa: prognozujemy z horyzontem 24 h metoda BEZPOSREDNIA, a nie
-rekurencyjna. Model dostaje wylacznie cechy, ktore sa znane na 24 h przed
-prognozowana godzina (opoznienia >= 24 h). Dzieki temu nie trzeba podawac
-wlasnych predykcji na wejscie i nie kumuluje sie blad - a ocena offline
-odpowiada temu, co model realnie zobaczy w produkcji.
+Design decision: we forecast 24 hours ahead with the DIRECT method, not the
+recursive one. The model receives only features that are known 24 hours before the
+forecast hour (lags of 24 h or more). This removes the need to feed the model its
+own predictions, error does not accumulate, and the offline evaluation matches what
+the model will actually see in production.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
     out["day_of_week"] = ts.dt.dayofweek  # 0=poniedzialek
     out["is_weekend"] = (out["day_of_week"] >= 5).astype(int)
     out["day_of_month"] = ts.dt.day
-    # kodowanie cykliczne: 23:00 i 00:00 maja byc blisko siebie,
-    # a liczbowo 23 i 0 sa najdalej jak sie da
+    # cyclical encoding: 23:00 and 00:00 should be close to each other,
+    # while numerically 23 and 0 are as far apart as possible
     out["hour_sin"] = np.sin(2 * np.pi * out["hour_of_day"] / 24)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour_of_day"] / 24)
     out["dow_sin"] = np.sin(2 * np.pi * out["day_of_week"] / 7)
@@ -41,7 +41,7 @@ def add_lags(df: pd.DataFrame, target: str = TARGET) -> pd.DataFrame:
     for lag in LAGS:
         out[f"lag_{lag}"] = out[target].shift(lag)
     for win in ROLLINGS:
-        # shift(HORIZON_H) najpierw: srednia nie moze widziec przyszlosci
+        # shift(HORIZON_H) first: the mean must not see the future
         out[f"roll_mean_{win}"] = out[target].shift(HORIZON_H).rolling(win, min_periods=2).mean()
         out[f"roll_std_{win}"] = out[target].shift(HORIZON_H).rolling(win, min_periods=2).std()
     return out
@@ -57,7 +57,7 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
 
 
 def build(df: pd.DataFrame, target: str = TARGET) -> pd.DataFrame:
-    """Z martu godzinowego robi macierz cech dla jednej kamery."""
+    """Turns the hourly mart into a feature matrix for a single camera."""
     out = add_calendar(df)
     out = add_lags(out, target)
     return out.dropna(subset=[c for c in out.columns if c.startswith("lag_")])

@@ -18,7 +18,7 @@ from .config import Config
 
 log = logging.getLogger(__name__)
 
-# porty typowe dla kamer IP
+# ports typical for IP cameras
 CAMERA_PORTS = {
     554: "RTSP",
     8554: "RTSP (alt)",
@@ -76,13 +76,13 @@ def scan_network(subnet: str | None = None) -> list[tuple[str, list[str]]]:
         for host, ports in pool.map(check, hosts):
             if ports:
                 found.append((host, ports))
-                marker = "  <-- kandydat na kamere" if any("RTSP" in p for p in ports) else ""
+                marker = "  <-- camera candidate" if any("RTSP" in p for p in ports) else ""
                 print(f"  {host:<16} {', '.join(ports)}{marker}")
 
     if not found:
-        print("  nic nie znalazlem (kamera moze byc w innej podsieci / na Wi-Fi guest)")
+        print("  nothing found (the camera may be on another subnet or on guest Wi-Fi)")
     else:
-        print("\nGdy znasz IP kamery, sprawdz sciezki RTSP:")
+        print("\nOnce you know the camera IP, check the RTSP paths:")
         for vendor, paths in RTSP_PATHS.items():
             print(f"  {vendor:<18} rtsp://user:haslo@IP:554{paths[0]}")
         print("\nPotem: hallwatch probe --source 'rtsp://user:haslo@IP:554/...'")
@@ -102,7 +102,7 @@ def ffprobe_info(source: str) -> str:
 
 
 def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> bool:
-    """Sprawdza, czy zrodlo dziala: wypisuje parametry i mierzy realny FPS."""
+    """Checks that the source works: prints its parameters and measures real FPS."""
     print(f"== Zrodlo: {source}\n")
 
     if str(source).lower().startswith("rtsp://"):
@@ -116,7 +116,7 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
                 print("  " + ln)
             has_audio = any("codec_type=audio" in ln for ln in info.splitlines())
             print(f"\n  audio w strumieniu: {'TAK' if has_audio else 'NIE'}"
-                  f"{'' if has_audio else '  (detekcja dzwieku bedzie nieaktywna)'}")
+                  f"{'' if has_audio else '  (audio detection will be inactive)'}")
         else:
             print("ffprobe nie zwrocil informacji o strumieniach:\n" + info[:800])
         print()
@@ -124,7 +124,7 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
     try:
         src = FrameSource(source, width=None).start()
     except Exception as exc:  # noqa: BLE001
-        print(f"BLAD: nie udalo sie otworzyc zrodla: {exc}")
+        print(f"ERROR: could not open the source: {exc}")
         return False
 
     frames, t0, shape = 0, time.time(), None
@@ -138,7 +138,7 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
             frames += 1
             shape = frame.shape
             if preview:
-                cv2.imshow("probe (q = wyjscie)", frame)
+                cv2.imshow("probe (q = quit)", frame)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
     finally:
@@ -148,20 +148,20 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
 
     elapsed = time.time() - t0
     if not frames or shape is None:
-        print("BLAD: zero klatek. Sprawdz login/haslo i sciezke RTSP.")
+        print("ERROR: zero frames. Check the login/password and the RTSP path.")
         return False
     if src.live:
         print(f"OK: {frames} klatek w {elapsed:.1f}s -> {frames/elapsed:.1f} FPS realnie, "
               f"rozdzielczosc {shape[1]}x{shape[0]}")
         if src.native_fps:
-            print(f"    FPS deklarowany przez zrodlo: {src.native_fps:.1f}")
+            print(f"    FPS declared by the source: {src.native_fps:.1f}")
         if src.native_fps and frames / elapsed < src.native_fps * 0.6:
-            print("    UWAGA: realny FPS mocno ponizej deklarowanego - slabe Wi-Fi "
-                  "albo za duzy strumien. Rozwaz substream kamery.")
+            print("    WARNING: real FPS well below the declared one, weak Wi-Fi "
+                  "or too large a stream. Consider the camera substream.")
     else:
-        # plik czytamy tak szybko, jak zdazy dysk - pomiar FPS nic tu nie znaczy
-        print(f"OK: plik odczytany, {frames} klatek, rozdzielczosc {shape[1]}x{shape[0]}, "
-              f"FPS pliku {src.native_fps:.1f}")
+        # a file is read as fast as the disk allows, so an FPS measurement means nothing here
+        print(f"OK: file read, {frames} frames, resolution {shape[1]}x{shape[0]}, "
+              f"file FPS {src.native_fps:.1f}")
     return True
 
 
@@ -169,10 +169,10 @@ def probe_source(source: str, seconds: float = 6.0, preview: bool = True) -> boo
 # Edytor stref
 # ---------------------------------------------------------------------------
 HELP = """
-  Klikaj LEWYM przyciskiem, by dodawac punkty.
-  1 = linia zliczajaca (2 punkty)    2 = strefa obecnosci    3 = maska prywatnosci
-  ENTER = zatwierdz ksztalt          u = cofnij punkt        c = wyczysc wszystko
-  s = zapisz do zones.generated.yaml q / ESC = wyjscie
+  LEFT-click to add points.
+  1 = counting line (2 points)       2 = presence zone       3 = privacy mask
+  ENTER = confirm shape              u = undo point          c = clear all
+  s = save to zones.generated.yaml   q / ESC = quit
 """
 
 
@@ -205,17 +205,17 @@ class ZoneEditor:
             return
         if self.mode == "line":
             self.line = self._norm(self.points)  # type: ignore[assignment]
-            print(f"  linia: {self.line}")
+            print(f"  line: {self.line}")
         elif self.mode == "zone":
-            name = f"strefa-{len(self.zones)+1}"
+            name = f"zone-{len(self.zones)+1}"
             self.zones.append({"name": name, "polygon": self._norm(self.points)})
-            print(f"  strefa '{name}' ({len(self.points)} pkt)")
+            print(f"  zone '{name}' ({len(self.points)} pts)")
         else:
-            name = f"maska-{len(self.masks)+1}"
+            name = f"mask-{len(self.masks)+1}"
             self.masks.append(
                 {"name": name, "polygon": self._norm(self.points), "mode": "blur", "strength": 35}
             )
-            print(f"  maska '{name}' ({len(self.points)} pkt)")
+            print(f"  mask '{name}' ({len(self.points)} pts)")
         self.points = []
 
     def render(self) -> np.ndarray:
@@ -240,8 +240,8 @@ class ZoneEditor:
             cv2.polylines(canvas, [np.array(self.points, np.int32)], False,
                           self.COLORS[self.mode], 1, cv2.LINE_AA)
         cv2.rectangle(canvas, (0, 0), (self.w, 28), (20, 20, 20), -1)
-        cv2.putText(canvas, f"tryb: {self.mode}  punkty: {len(self.points)}  "
-                            f"[1/2/3 tryb, ENTER ok, u cofnij, s zapisz, q wyjscie]",
+        cv2.putText(canvas, f"mode: {self.mode}  points: {len(self.points)}  "
+                            f"[1/2/3 mode, ENTER ok, u undo, s save, q quit]",
                     (10, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (230, 230, 230), 1, cv2.LINE_AA)
         return canvas
 
@@ -249,7 +249,7 @@ class ZoneEditor:
         data = {
             "counting": {
                 "line": self.line,
-                "direction_labels": {"positive": "wejscie", "negative": "wyjscie"},
+                "direction_labels": {"positive": "in", "negative": "out"},
                 "zones": self.zones,
             },
             "privacy": {"masks": self.masks},
@@ -260,7 +260,7 @@ class ZoneEditor:
 def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None) -> None:
     prof = cfg.camera(camera)
     source = source or prof.source
-    print(f"Kamera '{prof.name}', zrodlo: {source}")
+    print(f"Camera '{prof.name}', zrodlo: {source}")
     src = FrameSource(source, width=prof.width).start()
     frame = None
     for _ in range(60):  # kilka klatek na rozgrzanie autoexpozycji
@@ -269,7 +269,7 @@ def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None
             break
     src.stop()
     if frame is None:
-        print("Nie udalo sie pobrac klatki.")
+        print("Could not grab a frame.")
         return
 
     print(HELP)
@@ -297,7 +297,7 @@ def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None
         elif key == ord("s"):
             out = cfg.root / f"zones.{prof.slug}.yaml"
             out.write_text(editor.as_yaml(), encoding="utf-8")
-            print(f"\n  zapisano {out}\n  Wklej 'counting' i 'privacy' pod wpis kamery '{prof.name}' w config.yaml:\n")
+            print(f"\n  saved {out}\n  Paste 'counting' and 'privacy' under the camera entry '{prof.name}' w config.yaml:\n")
             print(editor.as_yaml())
     cv2.destroyAllWindows()
 
@@ -306,7 +306,7 @@ def edit_zones(cfg: Config, source: str | None = None, camera: str | None = None
 # Selftest
 # ---------------------------------------------------------------------------
 def make_test_video(path: Path, seconds: float = 10.0, fps: int = 12) -> Path:
-    """Syntetyczne wideo: szare tlo + szum + prostokat przejezdzajacy przez kadr."""
+    """Synthetic video: grey background + noise + a rectangle moving across the frame."""
     from .recorder import ClipWriter
 
     w, h = 640, 360
@@ -325,10 +325,10 @@ def make_test_video(path: Path, seconds: float = 10.0, fps: int = 12) -> Path:
 
 
 def make_person_video(path: Path, detector: object, seconds: float = 8.0, fps: int = 12) -> Path:
-    """Wideo z PRAWDZIWA postacia (wyciecie z obrazka wzorcowego) idaca w dol kadru.
+    """Video with a REAL figure (cut out of a reference image) walking down the frame.
 
-    Sluzy do regresji logiki liczenia: postac musi przekroczyc domyslna linie
-    (y = 0.62) dokladnie raz, wiec poprawny wynik to count_in == 1.
+    Used as a regression for the counting logic: the figure must cross the default
+    line (y = 0.62) exactly once, so the correct result is count_in == 1.
     """
     from ultralytics.utils import ASSETS
 
@@ -337,7 +337,7 @@ def make_person_video(path: Path, detector: object, seconds: float = 8.0, fps: i
     src = cv2.imread(str(ASSETS / "bus.jpg"))
     found = detector.detect(src, track=False)  # type: ignore[attr-defined]
     if not found:
-        raise RuntimeError("brak osob na obrazku wzorcowym - nie moge zbudowac wideo testowego")
+        raise RuntimeError("no people in the reference image, cannot build the test video")
     biggest = max(found, key=lambda d: (d.xyxy[3] - d.xyxy[1]) * (d.xyxy[2] - d.xyxy[0]))
     x1, y1, x2, y2 = (int(v) for v in biggest.xyxy)
     crop = src[max(0, y1) : y2, max(0, x1) : x2]
@@ -349,14 +349,14 @@ def make_person_video(path: Path, detector: object, seconds: float = 8.0, fps: i
     writer = ClipWriter(path, w, h, fps, crf=23)
     total = int(seconds * fps)
     rng = np.random.default_rng(11)
-    # stopy (dolna krawedz wyciecia) musza przejsc przez linie y = 0.62*360 = 223
+    # the feet (bottom edge of the cutout) must cross the line y = 0.62*360 = 223
     y_from, y_to = 10, h - ph - 8
     x = w // 2 - pw // 2
     for i in range(total):
         frame = np.full((h, w, 3), 110, np.uint8)
         frame += rng.integers(0, 5, (h, w, 3), dtype=np.uint8)
-        cv2.rectangle(frame, (0, 300), (w, h), (85, 85, 85), -1)  # "podloga" dla kontekstu
-        if i > fps:  # 1 s spokoju na nauczenie tla przez MOG2
+        cv2.rectangle(frame, (0, 300), (w, h), (85, 85, 85), -1)  # a "floor" for context
+        if i > fps:  # 1 s of calm so that MOG2 can learn the background
             t = min(1.0, (i - fps) / max(1, total - fps - 1))
             y = int(y_from + (y_to - y_from) * t)
             frame[y : y + ph, x : x + pw] = crop
@@ -370,7 +370,7 @@ def selftest(cfg: Config) -> bool:
 
     ok = True
 
-    print("== 1/4 Detektor YOLO na obrazku wzorcowym")
+    print("== 1/4 YOLO detector on the reference image")
     try:
         from ultralytics.utils import ASSETS
 
@@ -379,24 +379,24 @@ def selftest(cfg: Config) -> bool:
         det = PersonDetector(cfg.cameras[0].detection)
         img = cv2.imread(str(ASSETS / "bus.jpg"))
         found = det.detect(img, track=False)
-        print(f"   urzadzenie: {det.device}, wykryte osoby: {len(found)}")
+        print(f"   device: {det.device}, people detected: {len(found)}")
         if len(found) < 3:
-            print("   UWAGA: oczekiwano >=3 osob na bus.jpg")
+            print("   WARNING: expected >=3 people in bus.jpg")
             ok = False
         else:
             print("   OK")
     except Exception as exc:  # noqa: BLE001
-        print(f"   BLAD: {exc}")
+        print(f"   ERROR: {exc}")
         return False
 
-    print("\n== 2/4 Nagrywanie (ffmpeg -> H.264)")
+    print("\n== 2/4 Recording (ffmpeg -> H.264)")
     tmp = cfg.path("data/selftest")
     tmp.mkdir(parents=True, exist_ok=True)
     video = make_test_video(tmp / "synthetic.mp4")
     if video.exists() and video.stat().st_size > 1000:
         print(f"   OK: {video.name}, {video.stat().st_size/1024:.0f} kB")
     else:
-        print("   BLAD: nie udalo sie zapisac wideo testowego")
+        print("   ERROR: could not write the test video")
         return False
 
     def run_on(video_path: Path, tag: str) -> tuple:
@@ -426,48 +426,48 @@ def selftest(cfg: Config) -> bool:
         pipe.stop()
         return result
 
-    print("\n== 3/4 Pelny pipeline na wideo z ruchem")
+    print("\n== 3/4 Full pipeline on video with motion")
     state, events, clips, _ = run_on(video, "motion")
-    print(f"   przetworzone klatki: {state.frames_total}")
-    print(f"   zdarzenia w bazie:   {len(events)}")
-    print(f"   zapisane klipy:      {len(clips)}")
+    print(f"   frames processed:   {state.frames_total}")
+    print(f"   events in database: {len(events)}")
+    print(f"   clips written:      {len(clips)}")
     if state.frames_total < 50:
-        print("   BLAD: pipeline przetworzyl za malo klatek")
+        print("   ERROR: the pipeline processed too few frames")
         ok = False
     elif not events:
-        print("   BLAD: detekcja ruchu nie utworzyla zdarzenia")
+        print("   ERROR: motion detection did not create an event")
         ok = False
     elif not clips:
-        print("   BLAD: brak nagranego klipu")
+        print("   ERROR: no clip was recorded")
         ok = False
     else:
-        print(f"   OK: zdarzenie #{events[0].id} ({events[0].kind}), klip {events[0].clip_path}")
+        print(f"   OK: event #{events[0].id} ({events[0].kind}), clip {events[0].clip_path}")
 
-    print("\n== 4/4 Detekcja osoby, tracking i liczenie przejsc")
+    print("\n== 4/4 Person detection, tracking and crossing counts")
     try:
         person_video = make_person_video(tmp / "person.mp4", det)
         state, events, clips, counts = run_on(person_video, "person")
         person_events = [e for e in events if e.kind == "person"]
         total_crossings = counts.positive + counts.negative
-        print(f"   unikalne tracki:     {counts.unique_seen}")
-        print(f"   przekroczenia linii: {counts.positive} w dol / {counts.negative} w gore")
-        print(f"   zdarzenia 'person':  {len(person_events)}")
+        print(f"   unique tracks:      {counts.unique_seen}")
+        print(f"   line crossings:     {counts.positive} down / {counts.negative} up")
+        print(f"   'person' events:    {len(person_events)}")
         if not person_events:
-            print("   BLAD: osoba nie zostala rozpoznana jako zdarzenie typu 'person'")
+            print("   ERROR: the person was not recognised as a 'person' event")
             ok = False
         elif counts.unique_seen == 0:
-            print("   BLAD: tracker nie nadal zadnego ID")
+            print("   ERROR: the tracker assigned no ID")
             ok = False
         elif total_crossings != 1:
-            print(f"   BLAD: oczekiwano dokladnie 1 przekroczenia, jest {total_crossings}")
+            print(f"   ERROR: expected exactly 1 crossing, got {total_crossings}")
             ok = False
         else:
             ev = person_events[0]
-            print(f"   OK: zdarzenie #{ev.id}, max osob {ev.max_persons}, "
-                  f"in={ev.count_in} out={ev.count_out}, miniatura {ev.snapshot_path}")
+            print(f"   OK: event #{ev.id}, max people {ev.max_persons}, "
+                  f"in={ev.count_in} out={ev.count_out}, thumbnail {ev.snapshot_path}")
     except Exception as exc:  # noqa: BLE001
-        print(f"   BLAD: {exc}")
+        print(f"   ERROR: {exc}")
         ok = False
 
-    print("\n" + ("WSZYSTKO DZIALA" if ok else "SA PROBLEMY - patrz wyzej"))
+    print("\n" + ("EVERYTHING WORKS" if ok else "SA PROBLEMY - patrz wyzej"))
     return ok

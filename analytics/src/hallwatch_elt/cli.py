@@ -1,8 +1,8 @@
-"""CLI ELT: jeden sposob uruchamiania krokow lokalnie i z Airflowa.
+"""ELT CLI: one way of running the steps, locally and from Airflow.
 
-Airflow wola te same funkcje, co czlowiek w terminalu. Dzieki temu pipeline
-da sie debugowac bez podnoszenia orkiestratora, a zadania nie maja logiki,
-ktorej nie da sie odtworzyc recznie.
+Airflow calls the same functions a human calls in the terminal. That way the
+pipeline can be debugged without bringing up an orchestrator, and the tasks hold
+no logic that cannot be reproduced by hand.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ def task_dbt(*args: str) -> int:
     cmd = [sys.executable.replace("python", "dbt"), *args, "--profiles-dir", "."]
     if not Path(cmd[0]).exists():
         cmd[0] = str(ROOT / ".venv" / "bin" / "dbt")
-    # dbt dziedziczy nasza konfiguracje przez srodowisko, ale ze sciezkami
-    # juz rozwiazanymi - inaczej '../data/...' liczyloby sie od katalogu dbt/
+    # dbt inherits our configuration through the environment, but with paths
+    # already resolved, otherwise '../data/...' would be relative to dbt/
     env = {
         **os.environ,
         "HW_TARGET": settings.target,
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
-    log.info("Konfiguracja: %s", settings.describe())
+    log.info("Configuration: %s", settings.describe())
 
     match args.cmd:
         case "seed":

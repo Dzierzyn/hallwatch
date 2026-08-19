@@ -1,8 +1,8 @@
-"""Backup zdarzen do storage S3-compatible (Cloudflare R2 / Backblaze B2 / MinIO / AWS).
+"""Event backup to S3-compatible storage (Cloudflare R2 / Backblaze B2 / MinIO / AWS).
 
-Sens backupu poza mieszkaniem jest oczywisty: jesli ktos zabierze komputer albo
-kamere, nagranie zdarzenia i tak jest bezpieczne. Upload leci w tle, zeby nigdy
-nie zablokowac petli przetwarzania obrazu.
+The point of off-site backup is obvious: if someone takes the computer or the
+camera, the event recording is safe anyway. The upload runs in the background so it
+can never block the image-processing loop.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ CONTENT_TYPES = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg
 
 
 class CloudUploader:
-    """Kolejka uploadow obslugiwana przez watek w tle."""
+    """An upload queue served by a background thread."""
 
     def __init__(self, cfg: CloudCfg, on_uploaded: Callable[[int, str], None] | None = None) -> None:
         self.cfg = cfg
@@ -41,8 +41,8 @@ class CloudUploader:
         key = os.environ.get("HALLWATCH_S3_KEY")
         secret = os.environ.get("HALLWATCH_S3_SECRET")
         if not (cfg.bucket and key and secret):
-            self.error = "brak cloud.bucket lub HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET"
-            log.warning("Chmura wylaczona: %s", self.error)
+            self.error = "missing cloud.bucket or HALLWATCH_S3_KEY / HALLWATCH_S3_SECRET"
+            log.warning("Cloud disabled: %s", self.error)
             return
         try:
             import boto3
@@ -80,7 +80,7 @@ class CloudUploader:
         try:
             self._queue.put_nowait((event_id, path))
         except queue.Full:
-            log.warning("Kolejka uploadu pelna - pomijam %s", path.name)
+            log.warning("Upload queue full, skipping %s", path.name)
 
     def _worker(self) -> None:
         while True:
@@ -93,14 +93,14 @@ class CloudUploader:
                 extra = {"ContentType": CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")}
                 self._client.upload_file(str(path), self.cfg.bucket, key, ExtraArgs=extra)  # type: ignore[union-attr]
                 self.uploaded += 1
-                log.info("Wyslano do chmury: %s", key)
+                log.info("Uploaded to cloud: %s", key)
                 if self.on_uploaded is not None:
                     self.on_uploaded(event_id, key)
                 if self.cfg.delete_local_after_upload:
                     path.unlink(missing_ok=True)
             except Exception as exc:  # noqa: BLE001
                 self.failed += 1
-                log.error("Upload %s nieudany: %s", path.name, exc)
+                log.error("Upload of %s failed: %s", path.name, exc)
             finally:
                 self._queue.task_done()
 

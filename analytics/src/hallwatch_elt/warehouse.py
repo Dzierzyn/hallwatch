@@ -1,7 +1,7 @@
-"""Jeden interfejs do hurtowni - DuckDB w dev, BigQuery w prod.
+"""One interface to the warehouse: DuckDB in dev, BigQuery in prod.
 
-Kod ML nie ma prawa wiedziec, gdzie leza dane. Dzieki temu ten sam model
-trenuje sie lokalnie na DuckDB i produkcyjnie na BigQuery bez zmiany linijki.
+The ML code has no business knowing where the data lives. That way the same model
+trains locally on DuckDB and in production on BigQuery without changing a line.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class Warehouse:
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or settings
 
-    # -- odczyt -------------------------------------------------------------
+    # -- read ----------------------------------------------------------------
     def read(self, relation: str) -> pd.DataFrame:
         if self.cfg.is_bigquery:
             from google.cloud import bigquery
@@ -36,10 +36,10 @@ class Warehouse:
         finally:
             con.close()
 
-    # -- zapis --------------------------------------------------------------
+    # -- write ---------------------------------------------------------------
     def write(self, relation: str, df: pd.DataFrame) -> int:
         if df.empty:
-            log.warning("Nic do zapisania w %s", relation)
+            log.warning("Nothing to write to %s", relation)
             return 0
 
         if self.cfg.is_bigquery:

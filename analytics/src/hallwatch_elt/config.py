@@ -1,7 +1,7 @@
-"""Konfiguracja ELT - wszystko sterowane zmiennymi srodowiskowymi.
+"""ELT configuration, entirely driven by environment variables.
 
-Zasada: kod nie wie, czy laduje do DuckDB czy do BigQuery. Wie tylko, jaki
-ma target, a szczegoly siedza w jednym miejscu.
+The principle: the code does not know whether it is loading into DuckDB or into
+BigQuery. It only knows its target, and the details live in one place.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ def _env(name: str, default: str = "") -> str:
 
 @dataclass
 class Settings:
-    # zrodlo: baza SQLite zapisywana przez pipeline CV
+    # source: the SQLite database written by the CV pipeline
     source_db: Path = field(
         default_factory=lambda: Path(_env("HW_SOURCE_DB") or REPO / "data" / "hallwatch.db")
     )
-    # strefa lądowania: Parquet partycjonowany po dacie
+    # landing zone: Parquet partitioned by date
     raw_dir: Path = field(
         default_factory=lambda: Path(_env("HW_RAW_DIR") or ROOT / "data" / "raw")
     )
@@ -44,8 +44,8 @@ class Settings:
 
     def __post_init__(self) -> None:
         # Sciezki MUSZA byc bezwzgledne: dbt uruchamiamy z podkatalogu dbt/,
-        # wiec kazda sciezka wzgledna rozjechalaby sie w zaleznosci od tego,
-        # kto akurat wola dany krok. Blad tego typu jest cichy i mylacy.
+        # so every relative path would drift depending on
+        # who happens to invoke the step. That kind of bug is silent and misleading.
         for field_name in ("source_db", "raw_dir", "state_dir", "duckdb_path"):
             value = Path(getattr(self, field_name))
             if not value.is_absolute():

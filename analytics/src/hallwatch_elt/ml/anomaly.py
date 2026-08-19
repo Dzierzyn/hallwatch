@@ -1,18 +1,18 @@
-"""Wykrywanie anomalii w ruchu.
+"""Anomaly detection in traffic.
 
-Dwa niezalezne sygnaly, bo lapia rozne rzeczy:
+Two independent signals, because they catch different things:
 
-1. Reszty prognozy z odporna standaryzacja (mediana i MAD zamiast sredniej
-   i odchylenia). Anomalie z definicji sa wartosciami skrajnymi, wiec gdyby
-   uzyc zwyklego odchylenia standardowego, same anomalie by je zawyzyly
-   i schowaly sie przed detektorem. To odpowiada na pytanie: "czy o TEJ porze
-   ruch byl inny, niz powinien?"
+1. Forecast residuals with robust standardisation (median and MAD instead of mean
+   and standard deviation). Anomalies are by definition extreme values, so with a
+   plain standard deviation the anomalies themselves would inflate it and hide
+   from the detector. This answers the question: "was traffic AT THIS HOUR
+   different from what it should have been?"
 
-2. IsolationForest na przestrzeni cech - lapie nietypowe KOMBINACJE
-   (np. duzy ruch w srodku nocy w dzien roboczy), nawet gdy sama liczba
-   nie jest rekordowa.
+2. IsolationForest over the feature space, which catches unusual COMBINATIONS
+   (for example heavy traffic in the middle of the night on a weekday), even when
+   the count alone is not a record.
 
-Wynik laczony: alarm, gdy zadziala ktorykolwiek, z zapisem ktory to byl.
+The results are combined: an alarm fires when either triggers, recording which one.
 """
 
 from __future__ import annotations
@@ -29,14 +29,14 @@ log = logging.getLogger(__name__)
 
 Z_THRESHOLD = 3.5
 CONTAMINATION = 0.01
-MAD_TO_SIGMA = 1.4826  # przelicznik MAD -> odchylenie dla rozkladu normalnego
+MAD_TO_SIGMA = 1.4826  # MAD -> standard deviation factor for a normal distribution
 
 
 def robust_z(values: np.ndarray) -> np.ndarray:
     median = np.nanmedian(values)
     mad = np.nanmedian(np.abs(values - median))
     scale = MAD_TO_SIGMA * mad
-    if scale < 1e-9:  # dane niemal stale - brak sensownej skali
+    if scale < 1e-9:  # data almost constant, no meaningful scale
         return np.zeros_like(values, dtype=float)
     return (values - median) / scale
 

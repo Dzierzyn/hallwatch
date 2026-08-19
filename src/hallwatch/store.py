@@ -1,7 +1,7 @@
-"""Trwaly zapis zdarzen w SQLite.
+"""Durable event storage in SQLite.
 
-SQLite, nie pliki JSON: dostajemy zapytania po czasie, agregaty do wykresow i
-atomowosc, a caly "serwer bazy" to jeden plik obok klipow.
+SQLite rather than JSON files: we get queries over time, aggregates for charts and
+atomicity, while the whole "database server" is a single file next to the clips.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS events (
     clip_path     TEXT,
     snapshot_path TEXT,
     cloud_key     TEXT,
-    -- probkowanie: zdarzenie zlapane w oknie obserwacji, a nie w spisie ciaglym.
-    -- sample_weight to 1/duty_cycle, czyli mnoznik do ekstrapolacji.
+    -- sampling: an event caught inside an observation window, not a continuous census.
+    -- sample_weight is 1/duty_cycle, the multiplier used for extrapolation.
     sampled       INTEGER DEFAULT 0,
     sample_weight REAL DEFAULT 1.0,
     meta          TEXT
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS minute_stats (
 );
 """
 
-# kolumny dodane po fakcie - migracja dla baz zalozonych wczesniej
+# columns added after the fact - migration for databases created earlier
 MIGRATIONS = {
     "events": {
         "camera": "ALTER TABLE events ADD COLUMN camera TEXT NOT NULL DEFAULT ''",
@@ -102,14 +102,14 @@ class Store:
             self._conn.commit()
 
     def _migrate(self) -> None:
-        """Dokłada kolumny, ktorych brakuje w bazach zalozonych wczesniej."""
+        """Adds columns missing from databases created by earlier versions."""
         for table, columns in MIGRATIONS.items():
             existing = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
             for name, ddl in columns.items():
                 if name not in existing:
                     self._conn.execute(ddl)
 
-    # -- zapis --------------------------------------------------------------
+    # -- write ---------------------------------------------------------------
     def open_event(
         self,
         kind: str,
@@ -169,7 +169,7 @@ class Store:
             )
             self._conn.commit()
 
-    # -- odczyt -------------------------------------------------------------
+    # -- read ----------------------------------------------------------------
     def recent_events(
         self, limit: int = 50, kind: str | None = None, camera: str | None = None
     ) -> list[Event]:

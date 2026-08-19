@@ -1,12 +1,12 @@
-"""Walidowana konfiguracja ladowana z config.yaml.
+"""Validated configuration loaded from config.yaml.
 
-Uklad: sekcja `defaults` opisuje zachowanie wspolne, a `cameras` liste kamer,
-z ktorych kazda moze nadpisac dowolny fragment. Dzieki temu korytarz i ulica
-roznia sie tylko tym, czym naprawde sie roznia (klasy obiektow, tryb pracy,
-nagrywanie), a nie cala kopia ustawien.
+Layout: the `defaults` section describes shared behaviour, and `cameras` lists the
+cameras, each of which may override any fragment. That way the corridor and the
+street differ only in what genuinely differs (object classes, operating mode,
+recording), rather than through a full copy of the settings.
 
-Stary jednokamerowy config nadal dziala - jest wczytywany i zawijany w liste
-jednoelementowa, wiec aktualizacja nie wymaga przepisywania pliku.
+An old single-camera config still works: it is loaded and wrapped into a
+one-element list, so upgrading does not require rewriting the file.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 Point = tuple[float, float]
 
 
-# --- elementy skladowe profilu kamery ---------------------------------------
+# --- building blocks of a camera profile -------------------------------------
 class DetectionCfg(BaseModel):
     model: str = "yolo11n.pt"
     device: str = "auto"
@@ -48,8 +48,8 @@ class ZoneCfg(BaseModel):
 
 
 class DirectionLabels(BaseModel):
-    positive: str = "wejscie"
-    negative: str = "wyjscie"
+    positive: str = "in"
+    negative: str = "out"
 
 
 class CountingCfg(BaseModel):
@@ -93,17 +93,18 @@ class AudioCfg(BaseModel):
 
 
 class SamplingCfg(BaseModel):
-    """Okna probkowania dla statystyk ruchu.
+    """Sampling windows for traffic statistics.
 
-    Liczenie samochodow z wyzwalacza PIR daloby smieci - przegapiloby wiekszosc
-    pojazdow i nie wiadomo ktore. Zamiast tego obserwujemy krotkie okno co
-    ustalony czas i ekstrapolujemy. To probka, nie spis, i tak jest opisana
-    w danych (kolumna sampled + wspolczynnik).
+    Counting cars off a PIR trigger would produce garbage: it would miss most
+    vehicles, and there would be no way to know which ones. Instead we observe a
+    short window at a fixed interval and extrapolate. That is a sample, not a
+    census, and it is described as such in the data (a sampled column plus a
+    coefficient).
     """
 
     every_minutes: float = 60.0
     seconds: float = 300.0
-    align_to_clock: bool = True  # startuj o rownej godzinie, nie od uruchomienia
+    align_to_clock: bool = True  # start on the hour, not from process start
 
     @property
     def duty_cycle(self) -> float:
@@ -111,9 +112,9 @@ class SamplingCfg(BaseModel):
         return min(1.0, self.seconds / window)
 
 
-# --- profil kamery -----------------------------------------------------------
+# --- camera profile ----------------------------------------------------------
 class CameraProfile(BaseModel):
-    name: str = "kamera"
+    name: str = "camera"
     source: str = "0"
     width: int | None = 960
     fps_limit: float | None = 15.0
@@ -141,8 +142,8 @@ class CameraProfile(BaseModel):
 
     @property
     def clip_dir(self) -> str:
-        """Kazda kamera ma wlasny katalog klipow - inaczej nazwy po sekundach
-        kolidowalyby miedzy kamerami."""
+        """Each camera has its own clip directory, otherwise names based on
+        seconds would collide between cameras."""
         return f"{self.recording.dir.rstrip('/')}/{self.slug}"
 
 
@@ -203,10 +204,10 @@ class Config(BaseModel):
         seen: set[str] = set()
         for cam in self.cameras:
             if cam.slug in seen:
-                raise ValueError(f"Zduplikowana nazwa kamery: {cam.name}")
+                raise ValueError(f"Duplicate camera name: {cam.name}")
             seen.add(cam.slug)
         if not self.cameras:
-            raise ValueError("Trzeba skonfigurowac przynajmniej jedna kamere")
+            raise ValueError("At least one camera must be configured")
         return self
 
     def camera(self, name_or_slug: str | None = None) -> CameraProfile:
@@ -215,7 +216,7 @@ class Config(BaseModel):
         for cam in self.cameras:
             if name_or_slug in (cam.name, cam.slug):
                 return cam
-        raise KeyError(f"Nie ma kamery '{name_or_slug}'. Dostepne: {[c.name for c in self.cameras]}")
+        raise KeyError(f"No such camera '{name_or_slug}'. Dostepne: {[c.name for c in self.cameras]}")
 
     def path(self, relative: str) -> Path:
         p = Path(relative)
@@ -224,16 +225,16 @@ class Config(BaseModel):
     # -- wczytywanie ---------------------------------------------------------
     @staticmethod
     def _normalize(data: dict[str, Any]) -> dict[str, Any]:
-        """Sprowadza stary i nowy uklad pliku do jednej postaci."""
+        """Reduces the old and the new file layout to a single shape."""
         data = copy.deepcopy(data or {})
         defaults = data.pop("defaults", {}) or {}
 
         if "cameras" not in data:
-            # stary uklad: jedna kamera opisana kluczami najwyzszego poziomu
+            # old layout: a single camera described by top-level keys
             legacy = {k: data.pop(k) for k in LEGACY_KEYS if k in data}
             cam = data.pop("camera", {}) or {}
             merged = _deep_merge(legacy, cam)
-            merged.setdefault("name", cam.get("name", "kamera"))
+            merged.setdefault("name", cam.get("name", "camera"))
             data["cameras"] = [merged]
         else:
             data["cameras"] = [_deep_merge(defaults, cam) for cam in data["cameras"]]
@@ -245,7 +246,7 @@ class Config(BaseModel):
     def load(cls, path: str | Path = "config.yaml") -> "Config":
         path = Path(path).expanduser().resolve()
         if not path.exists():
-            raise FileNotFoundError(f"Brak pliku konfiguracji: {path}")
+            raise FileNotFoundError(f"Configuration file not found: {path}")
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         cfg = cls.model_validate(cls._normalize(raw))
         cfg.root = path.parent

@@ -1,8 +1,8 @@
-"""Powiadomienia push przez ntfy.sh (bez kont, bez tokenow, dziala na telefonie).
+"""Push notifications through ntfy.sh (no accounts, no tokens, works on a phone).
 
-Instalujesz apke ntfy, subskrybujesz swoj losowy temat, i dostajesz push z
-miniatura zdarzenia. Throttling pilnuje, zeby jedno przejscie przez korytarz
-nie wyslalo 40 powiadomien.
+You install the ntfy app, subscribe to your own random topic, and receive a push
+with a thumbnail of the event. Throttling makes sure that a single walk down the
+corridor does not send 40 notifications.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class Notifier:
         self._lock = threading.Lock()
         self.enabled = cfg.enabled and bool(cfg.ntfy_topic)
         if cfg.enabled and not self.enabled:
-            log.warning("Powiadomienia wlaczone, ale brak notify.ntfy_topic w configu")
+            log.warning("Notifications enabled but notify.ntfy_topic is missing from the config")
 
     @property
     def url(self) -> str:
@@ -66,8 +66,8 @@ class Notifier:
                 )
             resp.raise_for_status()
             return True
-        except Exception as exc:  # noqa: BLE001 - powiadomienie nie moze wywalic pipeline'u
-            log.warning("Nie udalo sie wyslac powiadomienia: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - a notification must not take down the pipeline
+            log.warning("Failed to send notification: %s", exc)
             return False
 
     def send_async(self, *args: object, **kwargs: object) -> None:

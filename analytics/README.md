@@ -1,46 +1,48 @@
-# HallWatch Analytics — ELT + dbt + ML
+# HallWatch Analytics: ELT + dbt + ML
 
-Warstwa danych nad pipeline'em computer vision [HallWatch](../README.md).
-Zdarzenia z kamer (osoby na korytarzu, pojazdy na ulicy) trafiają do hurtowni,
-przechodzą modelowanie w dbt, a na końcu model prognozuje ruch i wykrywa anomalie.
+A data layer on top of the [HallWatch](../README.md) computer-vision pipeline. Camera events
+(people in a corridor, vehicles on a street) land in a warehouse, go through dbt modelling, and
+at the end a model forecasts traffic and flags anomalies.
+
+*(Polish original of this document: [`README.pl.md`](README.pl.md))*
 
 ```text
-  pipeline CV                ELT                    hurtownia              ML
+   CV pipeline                ELT                    warehouse             ML
 ┌──────────────┐   ┌──────────────────┐   ┌────────────────────┐   ┌──────────────┐
-│ SQLite       │──▶│ extract          │──▶│ dbt                │──▶│ prognoza 24h │
-│ events       │   │ znacznik wodny   │   │ staging            │   │ anomalie     │
+│ SQLite       │──▶│ extract          │──▶│ dbt                │──▶│ 24h forecast │
+│ events       │   │ watermark        │   │ staging            │   │ anomalies    │
 │ crossings    │   │ Parquet dt=...   │   │ intermediate       │   └──────┬───────┘
 │ minute_stats │   └────────┬─────────┘   │ marts              │          │
 └──────────────┘            │             └────────────────────┘          │
                             ▼                        ▲                    │
-                   GCS + tabele zewnętrzne           └────────────────────┘
+                   GCS + external tables             └────────────────────┘
                    BigQuery (prod)                    mart_traffic_monitor
 ```
 
-Orkiestracja: Airflow (`dags/hallwatch_elt_dag.py`).
+Orchestration: Airflow (`dags/hallwatch_elt_dag.py`).
 
-## Dwa środowiska, jeden kod
+## Two environments, one codebase
 
 | | `HW_TARGET=dev` | `HW_TARGET=prod` |
 |---|---|---|
-| Hurtownia | DuckDB na dysku | BigQuery |
-| Surowe dane | Parquet czytany wprost | Parquet w GCS + tabele zewnętrzne |
-| Koszt | zero | skan danych |
-| Po co | rozwój i testy bez konta w chmurze | docelowe uruchomienie |
+| Warehouse | DuckDB on disk | BigQuery |
+| Raw data | Parquet read directly | Parquet in GCS + external tables |
+| Cost | zero | data scanned |
+| Purpose | development and tests with no cloud account | the real deployment |
 
-To nie jest wygoda, tylko warunek sensownej pracy: cały pipeline da się uruchomić
-i przetestować lokalnie, a na BigQuery leci **ten sam kod**. Różnice dialektów SQL
-są zamknięte w `dbt/macros/portable.sql`.
+This is not a convenience, it is a precondition for working sensibly: the whole pipeline can be
+run and tested locally, and **the same code** runs on BigQuery. Dialect differences are confined
+to `dbt/macros/portable.sql`.
 
-## Start
+## Getting started
 
 ```bash
 make install
-make seed      # 90 dni syntetycznej historii z prawdziwą sezonowością
+make seed      # 90 days of synthetic history with realistic seasonality
 make all       # extract → dbt build → ML → dbt post_ml
 ```
 
-Przejście na BigQuery:
+Switching to BigQuery:
 
 ```bash
 cp .env.example .env && $EDITOR .env      # HW_GCP_PROJECT, HW_GCS_BUCKET
@@ -50,91 +52,87 @@ make bq-setup
 HW_TARGET=prod make all
 ```
 
-## Decyzje projektowe
+## Design decisions
 
-**Przyrost ze znacznikiem wodnym, nie pełny przeładunek.** Zdarzenia są
-niezmienne po zamknięciu, a baza rośnie w nieskończoność. Zabieramy tylko to, co
-przybyło, do partycji `dt=YYYY-MM-DD`. Nazwa pliku jest deterministyczna wobec
-zakresu, więc powtórzony przebieg nadpisuje partycję zamiast dokleić wiersze.
+**Incremental extract with a watermark, not a full reload.** Events are immutable once closed and
+the database grows without bound. We take only what is new, into a `dt=YYYY-MM-DD` partition. The
+filename is deterministic with respect to the range, so a repeated run overwrites the partition
+instead of appending rows.
 
-**W BigQuery tabele zewnętrzne nad GCS, nie ładowanie do tabel natywnych.**
-Idempotentność wychodzi z konstrukcji: retry Airflowa nadpisuje pliki, a nie
-duplikuje danych — przy `WRITE_APPEND` duplikowałby, i to po cichu. Dodatkowo
-układ jest symetryczny z dev, gdzie DuckDB czyta te same pliki.
+**On BigQuery, external tables over GCS rather than loading into native tables.** Idempotency then
+follows from the design: an Airflow retry overwrites files rather than duplicating data, whereas
+`WRITE_APPEND` would duplicate it, and would do so silently. The layout is also symmetric with dev,
+where DuckDB reads the same files.
 
-**Strefa czasowa jawnie w obu dialektach.** DuckDB liczy `extract(hour)` w
-strefie sesji, BigQuery w UTC. Bez makra `to_local()` ten sam kod dawałby **inny
-profil dobowy** w dev i w prod, a wykryłby to dopiero ktoś, kto porównałby
-wykresy. Analityka godzinowa liczy się w czasie lokalnym, bo „szczyt o 7 rano"
-ma znaczyć 7 rano u mieszkańca.
+**Time zone stated explicitly in both dialects.** DuckDB computes `extract(hour)` in the session
+zone, BigQuery in UTC. Without the `to_local()` macro the same code would produce a **different
+daily profile** in dev and in prod, and it would only be caught by someone who compared the charts.
+Hourly analytics is computed in local time, because "the 7 a.m. peak" should mean 7 a.m. for the
+person who lives there.
 
-**Próbkowanie jest właściwością kamery, nie wiersza.** Kamera uliczna obserwuje
-5 minut na godzinę, więc każde jej zdarzenie niesie wagę `1/duty_cycle`. Gdyby
-wagę brać z wiersza, godziny bez zaobserwowanego ruchu miałyby wagę 1 i wypadały
-z ekstrapolacji, systematycznie **zawyżając** średnie natężenie — w pierwszej
-wersji dawało to 29 zdarzeń/h zamiast prawdziwych 19. Waga jest więc ustalana
-per kamera i rozciągana na cały kręgosłup czasu.
+**Sampling is a property of the camera, not of the row.** The street camera observes 5 minutes per
+hour, so each of its events carries weight `1/duty_cycle`. If the weight were taken from the row,
+hours with no observed traffic would have weight 1 and drop out of the extrapolation, systematically
+**overstating** average intensity. In the first version that produced 29 events/h against a true 19.
+The weight is therefore fixed per camera and stretched across the whole time spine.
 
-**Kręgosłup czasu wypełnia zera.** Godzina bez ruchu to nie brak danych, to
-informacja „zero". Bez `int_hour_spine` model nigdy nie zobaczyłby nocnej ciszy
-i systematycznie zawyżałby prognozy.
+**The time spine fills in the zeros.** An hour with no traffic is not missing data, it is the
+information "zero". Without `int_hour_spine` the model would never see the quiet of the night and
+would systematically overstate its forecasts.
 
-**Prognoza bezpośrednia, nie rekurencyjna.** Model dostaje wyłącznie cechy znane
-na 24 h przed prognozowaną godziną (opóźnienia ≥ 24 h). Nie podaje sobie własnych
-predykcji na wejście, więc błąd się nie kumuluje, a ocena offline odpowiada temu,
-co model zobaczy w produkcji.
+**Direct forecasting, not recursive.** The model receives only features known 24 hours before the
+forecast hour (lags of 24 h or more). It is never fed its own predictions, so error does not
+accumulate, and the offline evaluation matches what the model will see in production.
 
-**MAE, nie MAPE.** MAPE dzieli przez wartość rzeczywistą, a w nocy ruch wynosi
-zero — procenty wybuchają i metryka kłamie. Każdy wynik jest raportowany wobec
-naiwnej prognozy sezonowej („tyle co o tej porze tydzień temu"), bo bez punktu
-odniesienia każda liczba MAE brzmi mądrze.
+**MAE, not MAPE.** MAPE divides by the actual value, and at night traffic is zero, so the
+percentages explode and the metric lies. Every result is reported against a naive seasonal forecast
+("the same as this hour last week"), because without a reference point any MAE number sounds clever.
 
-**Anomalie: mediana i MAD, nie średnia i odchylenie.** Anomalie są z definicji
-wartościami skrajnymi — przy zwykłym odchyleniu standardowym same zawyżyłyby
-skalę i schowały się przed detektorem.
+**Anomalies via median and MAD, not mean and standard deviation.** Anomalies are by definition
+extreme values, and with a plain standard deviation they would inflate the scale themselves and hide
+from the detector.
 
-## Wyniki na danych demo
+## Results on demo data
 
 ```
-korytarz   MAE 1.000 vs naiwna 1.188  -> +15.8% lepszy   (train=1655 test=336)
-ulica      MAE 4.903 vs naiwna 6.286  -> +22.0% lepszy   (train=1655 test=336)
-anomalie   38 z 672 godzin (5.65%)
-dbt        PASS=32 (9 modeli + 23 testy)
+corridor   MAE 1.000 vs naive 1.188  -> 15.8% better   (train=1655 test=336)
+street     MAE 4.903 vs naive 6.286  -> 22.0% better   (train=1655 test=336)
+anomalies  38 of 672 hours (5.65%)
+dbt        PASS=32 (9 models + 23 tests)
 ```
 
-Detektor anomalii odnajduje dokładnie te skoki, które generator wstrzyknął do
-danych — to jest test poprawności, a nie tylko demonstracja.
+The anomaly detector finds exactly the spikes the generator injected into the data, which makes this
+a correctness test rather than only a demonstration.
 
-## Testy dbt
+## dbt tests
 
-23 testy: klucze główne, relacje `crossings → events`, słowniki wartości,
-nieujemność zliczeń, unikalność ziarna martu godzinowego oraz test biznesowy
-`assert_crossings_match_counts` — liczba zapisanych przekroczeń musi zgadzać się
-z licznikami zdarzenia. Rozjazd oznacza, że pipeline CV zgubił zapis.
+23 tests: primary keys, the `crossings → events` relationship, accepted-value sets, non-negativity of
+counts, uniqueness of the hourly mart's grain, and a business test `assert_crossings_match_counts`,
+where the number of recorded crossings must agree with the event counters. A mismatch means the CV
+pipeline dropped a write.
 
-## Uwagi o środowisku
+## Environment notes
 
-Airflow uruchamiaj przez `make airflow-up` (Docker). Lokalne wykonanie zadań
-Airflow 3 na SQLite potrafi się zawiesić na macOS — DAG parsuje się poprawnie,
-a wszystkie kroki są uruchamialne bez orkiestratora przez `hw-elt`, co jest
-zresztą celowe: zadania Airflowa są cienkie i wołają te same funkcje co CLI.
+Run Airflow through `make airflow-up` (Docker). Executing Airflow 3 tasks locally on SQLite can hang
+on macOS. The DAG parses correctly, and every step is runnable without an orchestrator through
+`hw-elt`, which is deliberate: the Airflow tasks are thin and call the same functions as the CLI.
 
-## Struktura
+## Layout
 
 ```text
 analytics/
   src/hallwatch_elt/
-    config.py      ustawienia ze środowiska, ścieżki bezwzględne
-    extract.py     SQLite → Parquet, znacznik wodny
-    load.py        Parquet → GCS → tabele zewnętrzne BigQuery
-    seed.py        generator syntetycznej historii
-    warehouse.py   jeden interfejs do DuckDB i BigQuery
-    ml/            cechy, prognoza, anomalie
-    cli.py         hw-elt: te same kroki co w DAG-u
+    config.py      settings from the environment, absolute paths
+    extract.py     SQLite → Parquet, watermark
+    load.py        Parquet → GCS → BigQuery external tables
+    seed.py        synthetic history generator
+    warehouse.py   one interface over DuckDB and BigQuery
+    ml/            features, forecasting, anomalies
+    cli.py         hw-elt: the same steps as in the DAG
   dbt/
-    macros/portable.sql   różnice dialektów w jednym miejscu
+    macros/portable.sql   dialect differences in one place
     models/staging|intermediate|marts
-    tests/                testy biznesowe
+    tests/                business tests
   dags/hallwatch_elt_dag.py
   docker-compose.yaml     Airflow + Postgres
 ```

@@ -1,13 +1,13 @@
 """DAG: HallWatch ELT + ML.
 
-Ksztalt przeplywu wynika z jednej zaleznosci: modele ML czytaja marty dbt,
-a mart monitorujacy czyta wyniki ML. Stad dwa przebiegi dbt rozdzielone
-krokiem ML - inaczej mielibysmy cykl w grafie.
+The shape of the flow follows from a single dependency: the ML models read dbt
+marts, and the monitoring mart reads the ML results. Hence two dbt runs separated
+by the ML step, otherwise the graph would contain a cycle.
 
-    extract -> load -> dbt build (bez post_ml) -> ml -> dbt build (post_ml)
+    extract -> load -> dbt build (without post_ml) -> ml -> dbt build (post_ml)
 
-Zadania sa cienkie: wolaja te same funkcje, co CLI. Cala logika mieszka
-w pakiecie hallwatch_elt, wiec da sie ja odpalic i zdebugowac bez Airflowa.
+The tasks are thin: they call the same functions as the CLI. All the logic lives
+in the hallwatch_elt package, so it can be run and debugged without Airflow.
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ DEFAULT_ARGS = {
 
 @dag(
     dag_id="hallwatch_elt",
-    description="Zdarzenia z kamer -> BigQuery -> dbt -> prognoza i anomalie",
+    description="Camera events -> BigQuery -> dbt -> forecast and anomalies",
     schedule="15 * * * *",  # kwadrans po kazdej pelnej godzinie
     start_date=pendulum.datetime(2026, 1, 1, tz="Europe/Warsaw"),
     catchup=False,
-    max_active_runs=1,  # przyrost ze znacznikiem wodnym nie znosi rownoleglosci
+    max_active_runs=1,  # watermark-based increments do not tolerate parallelism
     default_args=DEFAULT_ARGS,
     tags=["hallwatch", "elt", "ml"],
 )
@@ -47,7 +47,7 @@ def hallwatch_elt():
 
     @task
     def dbt_core(loaded: dict) -> str:
-        """Staging, intermediate i marty - wszystko poza tym, co zalezy od ML."""
+        """Staging, intermediate and marts, everything that does not depend on ML."""
         from hallwatch_elt.cli import task_dbt
 
         task_dbt("build", "--exclude", "tag:post_ml")
@@ -69,7 +69,7 @@ def hallwatch_elt():
 
     @task
     def report(ml_result: dict, dbt_status: str) -> str:
-        """Krotkie podsumowanie do logu - widac w UI bez wchodzenia w dane."""
+        """A short summary for the log, visible in the UI without digging into the data."""
         lines = [f"anomalie w oknie: {ml_result.get('anomalies', 0)}"]
         for m in ml_result.get("metrics", []):
             lines.append(

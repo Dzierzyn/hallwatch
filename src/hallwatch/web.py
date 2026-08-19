@@ -1,7 +1,7 @@
-"""Dashboard: podglad live (MJPEG) + API zdarzen i statystyk, dla wielu kamer.
+"""Dashboard: live preview (MJPEG) plus an events and statistics API, for many cameras.
 
-Kazdy endpoint przyjmuje parametr ?camera=<slug>. Brak parametru oznacza
-pierwsza kamere z konfiguracji, dzieki czemu stare linki nadal dzialaja.
+Every endpoint accepts a ?camera=<slug> parameter. Omitting it means the first camera
+in the configuration, so that older links keep working.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
         try:
             return manager.get(camera or None)
         except KeyError:
-            raise HTTPException(status_code=404, detail=f"nie ma kamery '{camera}'") from None
+            raise HTTPException(status_code=404, detail=f"no such camera '{camera}'") from None
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -43,7 +43,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
 
     @app.get("/api/cameras")
     def api_cameras() -> JSONResponse:
-        """Lista kamer - dashboard buduje z tego przelacznik."""
+        """The camera list, from which the dashboard builds its switch."""
         return JSONResponse([
             {
                 "slug": p.prof.slug,
@@ -66,7 +66,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
 
     @app.get("/stream.mjpg")
     def stream(camera: str | None = Query(default=None)) -> StreamingResponse:
-        """MJPEG: kolejne klatki JPEG w jednej odpowiedzi multipart."""
+        """MJPEG: successive JPEG frames in a single multipart response."""
         pipeline = pick(camera)
         interval = 1.0 / max(1.0, cfg.web.stream_fps)
 
@@ -138,7 +138,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
 
     @app.post("/api/wake")
     def wake(source: str = "api", camera: str | None = Query(default=None)) -> JSONResponse:
-        """Sygnal wybudzenia dla trybu on_demand (kamera na baterii)."""
+        """Wake signal for on_demand mode (battery camera)."""
         pipeline = pick(camera)
         accepted = pipeline.wake(source)
         return JSONResponse(
@@ -147,7 +147,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
                 "camera": pipeline.prof.name,
                 "mode": pipeline.prof.mode,
                 "detail": (
-                    "sesja zostanie otwarta"
+                    "a session will be opened"
                     if accepted
                     else f"tryb {pipeline.prof.mode} - wybudzanie zbedne"
                 ),
@@ -157,7 +157,7 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
 
     @app.post("/api/watch")
     def watch(camera: str | None = Query(default=None)) -> JSONResponse:
-        """Puls 'patrze' z dashboardu - trzyma sesje otwarta na czas podgladu."""
+        """The 'I am watching' heartbeat from the dashboard, holding the session open."""
         return JSONResponse(pick(camera).hold_session())
 
     @app.get("/api/stats")
@@ -173,14 +173,14 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
         allowed = [cfg.path(cam.recording.dir).resolve() for cam in cfg.cameras]
         target = (cfg.root / path).resolve()
         if not any(str(target).startswith(str(base)) for base in allowed) or not target.is_file():
-            raise HTTPException(status_code=404, detail="nie znaleziono")
+            raise HTTPException(status_code=404, detail="not found")
         return FileResponse(target)
 
     @app.get("/api/events/{event_id}/cloud")
     def cloud_link(event_id: int) -> RedirectResponse:
         event = manager.store.event(event_id)
         if event is None or not event.cloud_key:
-            raise HTTPException(status_code=404, detail="brak kopii w chmurze")
+            raise HTTPException(status_code=404, detail="no cloud copy")
         url = manager.uploader.presigned_url(event.cloud_key)
         if not url:
             raise HTTPException(status_code=503, detail="nie udalo sie podpisac URL")
@@ -188,12 +188,12 @@ def create_app(cfg: Config, manager: PipelineManager) -> FastAPI:
 
     @app.get("/healthz")
     def healthz() -> JSONResponse:
-        """Zdrowy = kazda kamera przetworzyla klatki i zadna nie zglosila bledu."""
+        """Healthy = every camera processed frames and none reported an error."""
         cams = {}
         healthy = True
         for slug, pipe in manager.pipelines.items():
             s = pipe.snapshot_state()
-            # kamera w trybie probkowania/on_demand moze spac - to nie blad
+            # a camera in sampling/on_demand mode may be asleep - that is not an error
             live_ok = s.frames_total > 0 or pipe.prof.mode != "continuous"
             ok = live_ok and s.last_error is None
             healthy &= ok

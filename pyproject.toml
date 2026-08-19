@@ -1,7 +1,7 @@
 [project]
 name = "hallwatch"
 version = "0.1.0"
-description = "Prywatny system CV do monitoringu korytarza: detekcja ruchu, liczenie osob, detekcja dzwieku, nagrywanie zdarzen"
+description = "Private computer-vision system for corridor monitoring: motion detection, people counting, audio detection, event recording"
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "opencv-python>=4.10",

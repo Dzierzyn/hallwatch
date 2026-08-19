@@ -1,10 +1,9 @@
-"""Extract: SQLite -> Parquet, przyrostowo, ze znacznikiem wodnym.
+"""Extract: SQLite -> Parquet, incremental, with a watermark.
 
-Dlaczego znacznik wodny, a nie pelny przeladunek: baza rosnie w nieskonczonosc,
-a zdarzenia sa niezmienne po zamknieciu. Za kazdym razem zabieramy tylko to, co
-przybylo od ostatniego przebiegu, i dopisujemy jako nowa partycje. Przebieg jest
-idempotentny w obrebie partycji - powtorzenie nadpisuje ten sam plik, zamiast
-duplikowac wiersze.
+Why a watermark rather than a full reload: the database grows without bound and
+events are immutable once closed. Each run takes only what arrived since the last
+one and appends it as a new partition. A run is idempotent within a partition,
+since repeating it overwrites the same file instead of duplicating rows.
 """
 
 from __future__ import annotations
@@ -26,8 +25,8 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class TableSpec:
     name: str
-    watermark_col: str  # kolumna rosnaca, po ktorej bierzemy przyrost
-    time_col: str  # kolumna do partycjonowania po dacie (epoch w sekundach)
+    watermark_col: str  # monotonically increasing column used to take the increment
+    time_col: str  # column used to partition by date (epoch seconds)
     unit: str = "s"  # 's' = epoch sekundy, 'min' = epoch minuty
 
 
@@ -48,7 +47,7 @@ class Watermarks:
             try:
                 self._data = json.loads(path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
-                log.warning("Uszkodzony plik znacznikow %s - zaczynam od zera", path)
+                log.warning("Corrupted watermark file %s, starting from scratch", path)
 
     def get(self, table: str) -> float:
         return float(self._data.get(table, 0.0))
@@ -73,7 +72,7 @@ def extract_table(
     query = f"SELECT * FROM {spec.name} WHERE {spec.watermark_col} > ? ORDER BY {spec.watermark_col}"
     df = pd.read_sql_query(query, conn, params=(since,))
     if df.empty:
-        log.info("%-13s brak nowych wierszy (znacznik %.0f)", spec.name, since)
+        log.info("%-13s no new rows (watermark %.0f)", spec.name, since)
         return 0, []
 
     df["_extracted_at"] = datetime.now(timezone.utc).isoformat()
@@ -83,7 +82,7 @@ def extract_table(
     for day, chunk in df.groupby("_partition_date", sort=True):
         out_dir = cfg.raw_dir / spec.name / f"dt={day}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        # nazwa pliku deterministyczna wzgledem zakresu -> powtorzenie nadpisuje
+        # filename deterministic w.r.t. the range -> a repeat overwrites
         lo = chunk[spec.watermark_col].min()
         hi = chunk[spec.watermark_col].max()
         path = out_dir / f"part-{int(lo)}-{int(hi)}.parquet"
@@ -101,7 +100,7 @@ def run(cfg: Settings | None = None, full_refresh: bool = False) -> dict[str, in
     if not cfg.source_db.exists():
         raise FileNotFoundError(
             f"Nie ma bazy zrodlowej: {cfg.source_db}\n"
-            "Uruchom pipeline CV albo wygeneruj dane demo: make seed"
+            "Run the CV pipeline or generate demo data: make seed"
         )
 
     wm_path = cfg.state_dir / "watermarks.json"

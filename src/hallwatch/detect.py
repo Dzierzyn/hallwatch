@@ -1,8 +1,9 @@
-"""Detekcja + tracking osob (YOLO11 + ByteTrack z Ultralytics).
+"""Person detection and tracking (YOLO11 + ByteTrack from Ultralytics).
 
-Detektor mowi "gdzie jest osoba na tej klatce". Tracker dokleja do tego
-TOZSAMOSC w czasie (track_id), i to on umozliwia liczenie: bez trackingu ta sama
-osoba stojaca 10 sekund przed drzwiami zostalaby zliczona 150 razy.
+The detector says "where the person is in this frame". The tracker attaches
+IDENTITY over time (track_id), and that is what makes counting possible: without
+tracking, the same person standing for 10 seconds in front of the door would be
+counted 150 times.
 """
 
 from __future__ import annotations
@@ -36,16 +37,16 @@ class Detection:
         return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
     def anchor(self, mode: str = "feet") -> tuple[float, float]:
-        """Punkt tracka uzywany do liczenia przejsc i obecnosci w strefach.
+        """The point on a track used for counting crossings and zone presence.
 
-        'feet' (kamera patrzaca z boku / skosem w dol korytarza): stopy trzymaja
-        sie podlogi, wiec nie skacza, gdy osoba podnosi rece albo czesciowo
-        wychodzi z kadru - a to podloga przecina linie zliczajaca.
+        'feet' (camera viewing from the side or at a downward angle along the
+        corridor): the feet stay on the floor, so they do not jump when a person
+        raises their arms or partially leaves the frame, and it is the floor that
+        crosses the counting line.
 
-        'center' (kamera pod sufitem patrzaca prosto w dol): z gory nie ma
-        "stop na dole boxa" - sylwetka to plama, ktorej dolna krawedz zmienia
-        sie losowo z kazdym krokiem. Srodek boxa jest wtedy jedynym stabilnym
-        punktem.
+        'center' (ceiling camera looking straight down): from above there are no
+        "feet at the bottom of the box", the silhouette is a blob whose lower edge
+        shifts randomly with every step. The box centre is then the only stable point.
         """
         return self.center if mode == "center" else self.feet
 
@@ -71,7 +72,7 @@ class PersonDetector:
 
         self.cfg = cfg
         self.device = resolve_device(cfg.device)
-        log.info("Laduje model %s na urzadzeniu %s", cfg.model, self.device)
+        log.info("Loading model %s on device %s", cfg.model, self.device)
         self.model = YOLO(cfg.model)
         self.names: dict[int, str] = dict(self.model.names or {})
 

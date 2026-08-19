@@ -1,10 +1,10 @@
-"""Odczyt klatek z RTSP / webcam / pliku, z automatycznym reconnectem.
+"""Frame reading from RTSP / webcam / file, with automatic reconnect.
 
-Kamery sieciowe to strumien w czasie rzeczywistym: jesli konsument jest
-wolniejszy niz kamera, klatki zalegaja w buforze i obraz "odjezdza" od
-rzeczywistosci. Dlatego dla zrodel live watek czytajacy zawsze trzyma tylko
-NAJNOWSZA klatke, a stare wyrzuca. Dla plikow (tryb offline/dev) czytamy
-sekwencyjnie, zeby nie pogubic klatek.
+Network cameras produce a real-time stream: if the consumer is slower than the
+camera, frames pile up in the buffer and the picture drifts away from reality. That
+is why, for live sources, the reader thread always holds only the NEWEST frame and
+discards old ones. For files (offline/dev mode) we read sequentially so that no
+frames are lost.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 
 def parse_source(source: str) -> int | str:
-    """'0' -> 0 (webcam), reszta zostaje stringiem (RTSP/plik)."""
+    """'0' -> 0 (webcam), anything else stays a string (RTSP/file)."""
     s = str(source).strip()
     return int(s) if s.isdigit() else s
 
@@ -35,7 +35,7 @@ def is_live_source(source: str) -> bool:
 
 
 class FrameSource:
-    """Jednolite zrodlo klatek dla kamery RTSP, webcama i pliku wideo."""
+    """A uniform frame source for an RTSP camera, a webcam and a video file."""
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class FrameSource:
         self._thread: threading.Thread | None = None
         self.reconnects = 0
         self.native_fps: float = 0.0
-        self.finished = False  # True gdy plik sie skonczyl
+        self.finished = False  # True once the file has ended
 
     # -- otwieranie ---------------------------------------------------------
     def _open(self) -> bool:
@@ -69,7 +69,7 @@ class FrameSource:
             ("rtsp://", "rtmp://", "http://", "https://")
         ):
             if not Path(target).exists():
-                raise FileNotFoundError(f"Nie ma takiego pliku wideo: {target}")
+                raise FileNotFoundError(f"No such video file: {target}")
 
         cap = cv2.VideoCapture(target, cv2.CAP_FFMPEG if isinstance(target, str) else cv2.CAP_ANY)
         if not cap.isOpened():
@@ -84,12 +84,12 @@ class FrameSource:
         return True
 
     def open(self) -> None:
-        """Otwiera zrodlo (blokujaco, z retry dla zrodel live)."""
+        """Opens the source (blocking, with retry for live sources)."""
         while not self._stop.is_set():
             try:
                 if self._open():
                     log.info(
-                        "Zrodlo otwarte: %s (live=%s, fps=%.1f)",
+                        "Source opened: %s (live=%s, fps=%.1f)",
                         self.source,
                         self.live,
                         self.native_fps,
@@ -104,7 +104,7 @@ class FrameSource:
             )
             self._stop.wait(self.reconnect_delay_s)
 
-    # -- watek dla zrodel live ---------------------------------------------
+    # -- thread for live sources --------------------------------------------
     def start(self) -> "FrameSource":
         self.open()
         if self.live:
@@ -141,10 +141,10 @@ class FrameSource:
         self._stop.wait(self.reconnect_delay_s)
         try:
             self.open()
-        except Exception as exc:  # noqa: BLE001 - petla musi przezyc
+        except Exception as exc:  # noqa: BLE001 - the loop has to survive
             log.error("Reconnect nieudany: %s", exc)
 
-    # -- odczyt -------------------------------------------------------------
+    # -- read ---------------------------------------------------------------
     def _resize(self, frame: np.ndarray) -> np.ndarray:
         if self.width and frame.shape[1] != self.width:
             h = int(round(frame.shape[0] * self.width / frame.shape[1]))
@@ -152,7 +152,7 @@ class FrameSource:
         return frame
 
     def read(self, timeout: float = 5.0) -> tuple[np.ndarray | None, float]:
-        """Zwraca (klatka, timestamp). Klatka None = brak nowych danych / koniec pliku."""
+        """Returns (frame, timestamp). A None frame means no new data or end of file."""
         if not self.live:
             assert self._cap is not None
             ok, frame = self._cap.read()
@@ -160,7 +160,7 @@ class FrameSource:
                 self.finished = True
                 return None, time.time()
             if self.fps_limit and self.native_fps > self.fps_limit:
-                # przy odtwarzaniu pliku przerzedzamy klatki do docelowego fps
+                # when replaying a file we thin frames down to the target fps
                 skip = int(self.native_fps / self.fps_limit) - 1
                 for _ in range(max(0, skip)):
                     self._cap.grab()

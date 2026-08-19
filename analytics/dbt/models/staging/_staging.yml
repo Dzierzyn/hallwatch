@@ -12,7 +12,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ["korytarz", "ulica", "nieznana"]
+                values: ["corridor", "street", "unknown"]
       - name: event_kind
         tests:
           - accepted_values:
@@ -38,7 +38,7 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values: ["wejscie", "wyjscie"]
+                values: ["in", "out"]
 
   - name: stg_minute_stats
     description: "Agregaty minutowe; ziarno to para (kamera, minuta)."

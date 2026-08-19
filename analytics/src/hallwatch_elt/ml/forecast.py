@@ -1,12 +1,12 @@
-"""Prognoza ruchu godzinowego na 24 h do przodu.
+"""Hourly traffic forecast, 24 hours ahead.
 
-Model: HistGradientBoostingRegressor na cechach kalendarzowych i opoznieniach.
-Punkt odniesienia: naiwna prognoza sezonowa - "tyle samo, co o tej porze
-tydzien temu". To wazne, bo bez baseline'u kazda liczba MAE brzmi madrze,
-a dopiero stosunek do naiwnej prognozy mowi, czy model wnosi cokolwiek.
+Model: HistGradientBoostingRegressor over calendar features and lags.
+Reference point: a naive seasonal forecast, "the same as this hour last week".
+This matters, because without a baseline any MAE number sounds clever, and only
+the ratio against the naive forecast says whether the model contributes anything.
 
-Metryka: MAE, nie MAPE. MAPE dzieli przez wartosc rzeczywista, a w nocy ruch
-wynosi zero - procenty wybuchaja do nieskonczonosci i metryka klamie.
+Metric: MAE, not MAPE. MAPE divides by the actual value, and at night traffic is
+zero, so the percentages blow up to infinity and the metric lies.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _fit_one(hist: pd.DataFrame, camera: str) -> tuple[Metrics, pd.DataFrame]:
     train = feat[feat["hour_ts"] <= cutoff]
     test = feat[feat["hour_ts"] > cutoff]
     if len(train) < 200 or test.empty:
-        raise ValueError(f"za malo danych dla kamery {camera}: train={len(train)} test={len(test)}")
+        raise ValueError(f"not enough data for camera {camera}: train={len(train)} test={len(test)}")
 
     model = HistGradientBoostingRegressor(
         max_iter=400, learning_rate=0.06, max_depth=6,
@@ -84,8 +84,8 @@ def _fit_one(hist: pd.DataFrame, camera: str) -> tuple[Metrics, pd.DataFrame]:
         "is_forecast": False,
     })
 
-    # prognoza wlasciwa: 24 h w przod. Wszystkie opoznienia >= 24 h, wiec
-    # kazda potrzebna wartosc jest juz znana - zadnej rekurencji.
+    # the forecast proper: 24 h ahead. All lags are >= 24 h, so
+    # every value needed is already known, with no recursion.
     last = hist["hour_ts"].max()
     future = pd.DataFrame({
         "hour_ts": pd.date_range(last + pd.Timedelta(hours=1), periods=F.HORIZON_H, freq="h"),
@@ -121,7 +121,7 @@ def run(hourly: pd.DataFrame) -> tuple[pd.DataFrame, list[Metrics]]:
         try:
             metrics, preds = _fit_one(hist, str(camera))
         except ValueError as exc:
-            log.warning("Pomijam kamere %s: %s", camera, exc)
+            log.warning("Skipping camera %s: %s", camera, exc)
             continue
         all_metrics.append(metrics)
         frames.append(preds)

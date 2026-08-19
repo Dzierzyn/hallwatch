@@ -1,12 +1,13 @@
-"""Detekcja dzwieku ze strumienia RTSP (osobny proces ffmpeg -> surowe PCM).
+"""Audio detection from the RTSP stream (a separate ffmpeg process -> raw PCM).
 
-Dlaczego osobno od wideo: OpenCV w ogole nie wystawia audio z RTSP. Bierzemy
-wiec ten sam URL, mowimy ffmpegowi "-vn" (bez wideo) i dostajemy strumien
-16-bitowych probek, ktory liczymy w numpy.
+Why separate from video: OpenCV does not expose audio from RTSP at all. So we take
+the same URL, tell ffmpeg "-vn" (no video) and get a stream of 16-bit samples that
+we process in numpy.
 
-Poziom liczymy w dBFS (0 dB = maksymalna amplituda, wartosci sa ujemne), z
-histereza: inny prog na WLACZENIE alarmu i inny na jego wygaszenie. Bez tego
-dzwiek oscylujacy wokol progu generowalby setki zdarzen na sekunde.
+The level is computed in dBFS (0 dB = maximum amplitude, values are negative), with
+hysteresis: one threshold to RAISE the alarm and a different one to clear it.
+Without that, sound oscillating around the threshold would generate hundreds of
+events per second.
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ class AudioMonitor:
             try:
                 self._proc = self._spawn()
             except FileNotFoundError:
-                self.error = "brak ffmpeg w PATH"
+                self.error = "ffmpeg not found in PATH"
                 log.error("Audio: %s", self.error)
                 return
 
@@ -117,7 +118,7 @@ class AudioMonitor:
             if self._stop.is_set():
                 break
             if not got_any:
-                self.error = "brak sciezki audio w strumieniu (kamera bez mikrofonu?)"
+                self.error = "no audio track in the stream (camera without a microphone?)"
                 log.warning("Audio: %s", self.error)
                 return
             log.warning("Strumien audio przerwany - restart za %.0fs", backoff)

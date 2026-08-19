@@ -1,9 +1,9 @@
-"""HallWatch - prywatny pipeline computer vision dla korytarza."""
+"""HallWatch: a private computer-vision pipeline for a corridor."""
 
 import os
 
-# Musi byc ustawione PRZED otwarciem strumienia RTSP przez OpenCV:
-# TCP zamiast UDP (brak artefaktow), krotszy timeout, maly bufor.
+# Must be set BEFORE OpenCV opens the RTSP stream:
+# TCP instead of UDP (no artefacts), shorter timeout, small buffer.
 os.environ.setdefault(
     "OPENCV_FFMPEG_CAPTURE_OPTIONS",
     "rtsp_transport;tcp|stimeout;5000000|max_delay;500000|reorder_queue_size;0",

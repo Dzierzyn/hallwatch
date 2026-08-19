@@ -1,9 +1,10 @@
-"""Liczenie osob: przekroczenia linii + obecnosc w strefach.
+"""People counting: line crossings plus presence in zones.
 
-Algorytm linii: dla kazdego tracka trzymamy po ktorej stronie odcinka byl
-poprzednio (znak iloczynu wektorowego). Zmiana znaku = przekroczenie. Dodatkowo
-sprawdzamy, czy punkt przeciecia lezy W OBREBIE odcinka - inaczej osoba idaca
-daleko obok liczylaby sie jako przejscie (bo prosta jest nieskonczona).
+The line algorithm: for each track we remember which side of the segment it was on
+previously (the sign of the cross product). A sign change means a crossing. We also
+check that the intersection point lies WITHIN the segment, otherwise a person
+walking well off to the side would be counted as a crossing, because the line is
+infinite.
 """
 
 from __future__ import annotations
@@ -132,7 +133,7 @@ class PeopleCounter:
         return crossings
 
     def _gc(self, ts: float, max_idle_s: float = 30.0) -> None:
-        """Zwalnia pamiec po trackach, ktorych dawno nie widzielismy."""
+        """Frees memory for tracks we have not seen in a long time."""
         stale = [tid for tid, seen in self._last_seen.items() if ts - seen > max_idle_s]
         for tid in stale:
             self._last_seen.pop(tid, None)

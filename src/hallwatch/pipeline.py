@@ -1,17 +1,17 @@
-"""Serce systemu: petla przetwarzania i maszyna stanow zdarzenia.
+"""The heart of the system: the processing loop and the event state machine.
 
-Przeplyw jednej klatki:
+The path of a single frame:
 
-    kamera -> MASKA PRYWATNOSCI -> detektor ruchu -> (jesli ruch) YOLO+tracking
-           -> licznik przejsc i stref -> nakladka -> bufor nagrania / stream / DB
+    camera -> PRIVACY MASK -> motion detector -> (if motion) YOLO + tracking
+           -> line and zone counter -> overlay -> recording buffer / stream / DB
 
-Maska jest pierwsza w kolejnosci celowo: nic z zasloniętego obszaru nie dociera
-do detekcji, nagrania ani chmury.
+The mask comes first on purpose: nothing from a masked area reaches detection,
+recording or the cloud.
 
-Maszyna stanow oszczedza CPU i dysk:
-    IDLE   - tylko MOG2 (~1 ms/klatka), YOLO spi
-    AWAKE  - ruch wybudzil detektor; YOLO + tracking na kazdej klatce
-    EVENT  - trwa zdarzenie: leci nagranie z pre-rollem, zbieramy statystyki
+The state machine saves CPU and disk:
+    IDLE   - MOG2 only (~1 ms/frame), YOLO asleep
+    AWAKE  - motion woke the detector; YOLO plus tracking on every frame
+    EVENT  - an event is in progress: recording with pre-roll, statistics collected
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "train"}
 
 @dataclass
 class LiveState:
-    """Migawka stanu dla dashboardu (czytana z innego watku niz zapisywana)."""
+    """A state snapshot for the dashboard (read from a different thread than it is written)."""
 
     jpeg: bytes | None = None
     jpeg_seq: int = 0
@@ -99,9 +99,9 @@ class Pipeline:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
 
-        # baza, chmura i powiadomienia sa WSPOLNE dla wszystkich kamer - jedna
-        # os czasu zdarzen i jedna kolejka uploadu. Menedzer je wstrzykuje;
-        # przy uruchomieniu pojedynczej kamery tworzymy wlasne.
+        # the database, cloud and notifications are SHARED across all cameras: one
+        # event timeline and one upload queue. The manager injects them;
+        # when running a single camera we create our own.
         self._owns_shared = store is None
         self.store = store or Store(cfg.path(cfg.storage.db))
         self.notifier = notifier or Notifier(cfg.notify)
@@ -193,7 +193,7 @@ class Pipeline:
     def _pump(
         self, source: FrameSource, deadline: float | None = None, idle_exit: bool = True
     ) -> str:
-        """Przetwarza klatki, dopoki jest po co. Zwraca powod wyjscia."""
+        """Processes frames for as long as there is a reason to. Returns the exit reason."""
         cfg, prof = self.cfg, self.prof
         min_interval = 1.0 / prof.fps_limit if prof.fps_limit else 0.0
         last_loop = 0.0
@@ -215,7 +215,7 @@ class Pipeline:
 
             if deadline is not None:
                 if ts < self._watch_until:
-                    # ktos patrzy - nie rozlaczaj sie, choc w kadrze cisza.
+                    # someone is watching - do not disconnect, even with a quiet frame.
                     # Bezpiecznik chroni bateria przed zapomniana zakladka.
                     if ts - self._session_started > prof.watch_max_s:
                         return "watch-limit"
@@ -232,24 +232,24 @@ class Pipeline:
         try:
             reason = self._pump(source)
             if reason == "eof":
-                log.info("Koniec pliku wideo - zamykam pipeline")
+                log.info("End of video file, closing the pipeline")
         finally:
             source.stop()
             self._close_event(time.time(), reason="stop")
 
     # -- tryb bateryjny -----------------------------------------------------
     def _run_on_demand(self) -> None:
-        """Strumien otwierany dopiero na sygnal wybudzenia.
+        """The stream is opened only on a wake signal.
 
-        Kamera na baterii nie przezyje ciaglego streamu - utrzymanie polaczenia
-        RTSP nie pozwala jej zasnac i zjada akumulator w kilka dni. Tutaj
-        czekamy na sygnal (webhook /api/wake, 'hallwatch wake', automatyzacja
-        z huba), lapiemy krotka sesje i rozlaczamy sie, zeby kamera wrocila do
-        snu.
+        A battery camera will not survive a continuous stream: holding an RTSP
+        connection open stops it from sleeping and drains the battery in days. Here we
+        wait for a signal (the /api/wake webhook, 'hallwatch wake', an automation from
+        the hub), take a short session and disconnect so the camera can go back to
+        sleep.
         """
         cfg, prof = self.cfg, self.prof
         log.info(
-            "Pipeline wystartowal w trybie on_demand (sesja max %.0fs, cisza %.0fs%s)",
+            "Pipeline started in on_demand mode (session max %.0fs, idle %.0fs%s)",
             prof.session_seconds,
             prof.session_idle_s,
             f", godziny {prof.active_hours}" if prof.active_hours else "",
@@ -264,14 +264,14 @@ class Pipeline:
             self._session()
 
     def _session(
-        self, max_seconds: float | None = None, idle_exit: bool = True, tag: str = "Sesja"
+        self, max_seconds: float | None = None, idle_exit: bool = True, tag: str = "Session"
     ) -> None:
         cfg, prof = self.cfg, self.prof
         started = time.time()
         self._session_started = started
         log.info("%s: lacze sie ze zrodlem", tag)
-        # nowy model tla na kazda sesje - stary jest bezuzyteczny po przerwie,
-        # a warmup skrocony, bo o zdarzeniu wiemy z sygnalu wybudzenia
+        # a fresh background model for each session - the old one is useless after a break,
+        # and the warmup is shortened, because the wake signal already told us about the event
         self.motion = MotionDetector(prof.motion.model_copy(update={"warmup_frames": 3}))
         self._last_activity = started
         with self._state_lock:
@@ -287,33 +287,34 @@ class Pipeline:
             self._close_event(time.time(), reason="session-end")
             with self._state_lock:
                 self.state.session_active = False
-        log.info("%s zakonczona po %.1fs (%s) - kamera moze zasnac",
+        log.info("%s ended after %.1fs (%s), the camera may sleep",
                  tag, time.time() - started, reason)
 
     # -- tryb probkowania (statystyki ruchu) --------------------------------
     def _run_sampling(self) -> None:
-        """Obserwuje krotkie okno co ustalony czas i ekstrapoluje.
+        """Observes a short window at a fixed interval and extrapolates.
 
-        Liczenie pojazdow z wyzwalacza ruchu daloby smieci: PIR przegapia
-        wiekszosc samochodow i nie wiadomo ktore, wiec liczby nie znaczylyby nic.
-        Probkowanie jest uczciwsze - wiemy dokladnie, jaka czesc czasu widzielismy
-        (duty cycle), i kazde zdarzenie niesie mnoznik do ekstrapolacji.
+        Counting vehicles off a motion trigger would produce garbage: PIR misses most
+        cars and there is no way to know which ones, so the numbers would mean nothing.
+        Sampling is more honest: we know exactly what fraction of the time we were
+        watching (the duty cycle), and every event carries a multiplier for
+        extrapolation.
 
-        Okna sa domyslnie wyrownane do zegara, zeby probki z roznych dni
-        pokrywaly te same fragmenty godziny - inaczej porownania miedzy dobami
-        mieszalyby szczyt z cisza.
+        Windows are aligned to the clock by default, so that samples from different
+        days cover the same parts of the hour, otherwise comparisons across days would
+        mix the peak with the quiet.
         """
         prof = self.prof
         s = prof.sampling
         log.info(
-            "Pipeline wystartowal w trybie sampling: %.0fs co %.0f min (widzimy %.1f%% czasu)",
+            "Pipeline started in sampling mode: %.0fs every %.0f min (we see %.1f%% of the time)",
             s.seconds, s.every_minutes, s.duty_cycle * 100,
         )
         first = True
         while not self._stop.is_set():
             if not first:
                 wait_s = self._seconds_to_next_window()
-                log.info("Nastepne okno za %.0fs - kamera spi", wait_s)
+                log.info("Next window in %.0fs, the camera is asleep", wait_s)
                 if self._stop.wait(wait_s):
                     break
             first = False
@@ -321,7 +322,7 @@ class Pipeline:
                 continue
             self._sampling_window = True
             try:
-                self._session(max_seconds=s.seconds, idle_exit=False, tag="Okno probkowania")
+                self._session(max_seconds=s.seconds, idle_exit=False, tag="Sampling window")
             finally:
                 self._sampling_window = False
 
@@ -349,7 +350,7 @@ class Pipeline:
         return start <= minutes < end if start <= end else (minutes >= start or minutes < end)
 
     def wake(self, source: str = "api") -> bool:
-        """Zglasza wybudzenie. Zwraca False, gdy tryb continuous (nic nie robi)."""
+        """Reports a wake-up. Returns False in continuous mode (where it does nothing)."""
         prof = self.prof
         if self.prof.mode != "on_demand":
             return False
@@ -358,10 +359,10 @@ class Pipeline:
         return True
 
     def hold_session(self) -> dict:
-        """Puls z dashboardu: 'patrze, nie rozlaczaj sie'.
+        """A heartbeat from the dashboard: 'I am watching, do not disconnect'.
 
-        Wolane cyklicznie, dopoki karta przegladarki jest widoczna. Jesli sesji
-        nie ma, budzi kamere; jesli jest, przedluza ja o watch_hold_s.
+        Called periodically for as long as the browser tab is visible. If there is no
+        session it wakes the camera; if there is, it extends it by watch_hold_s.
         """
         cfg, prof = self.cfg, self.prof
         if prof.mode != "on_demand":
@@ -391,7 +392,7 @@ class Pipeline:
         # 2. tani straznik
         motion = self.motion.update(frame)
 
-        # 3. detekcja tylko gdy jest po co
+        # 3. detection only when there is a reason for it
         detections: list[Detection] = []
         detect_ms = 0.0
         if motion.detected:
@@ -403,7 +404,7 @@ class Pipeline:
             detect_ms = (time.perf_counter() - t0) * 1000.0
 
         # detekcje, ktorych kotwica wpada w maske prywatnosci - odrzucamy
-        # (martwa sciezka, dopoki privacy.masks jest puste)
+        # (dead path for as long as privacy.masks is empty)
         if self.masker.active and detections:
             anchor_mode = prof.counting.anchor
             detections = [
@@ -441,15 +442,15 @@ class Pipeline:
 
         fps = self._fps(ts)
         hud = [
-            (f"FPS {fps:4.1f}   osoby {persons}", draw.WHITE),
+            (f"FPS {fps:4.1f}   people {persons}", draw.WHITE),
             (
-                f"{'AWAKE' if awake else 'IDLE '}  YOLO {detect_ms:5.1f}ms  ruch {motion.area_frac*100:4.1f}%",
+                f"{'AWAKE' if awake else 'IDLE '}  YOLO {detect_ms:5.1f}ms  motion {motion.area_frac*100:4.1f}%",
                 draw.GREEN if awake else draw.GREY,
             ),
             (
                 f"{self.counter.cfg.direction_labels.positive} {self.counter.state.positive}"
                 f"  {self.counter.cfg.direction_labels.negative} {self.counter.state.negative}"
-                f"  unikalne {self.counter.state.unique_seen}",
+                f"  unique {self.counter.state.unique_seen}",
                 draw.YELLOW,
             ),
         ]
@@ -465,7 +466,7 @@ class Pipeline:
         if self.recorder.active:
             draw.draw_rec_indicator(annotated)
 
-        # 7. nagranie: czysta klatka (zamaskowana) albo z wypalona nakladka
+        # 7. recording: a clean (masked) frame, or one with the overlay burned in
         self.recorder.push(annotated if prof.recording.burn_overlay else frame, ts)
 
         # kadr "najlepszy" do miniatury zdarzenia = najwiecej osob naraz
@@ -554,7 +555,7 @@ class Pipeline:
                 self._event_in += 1
             else:
                 self._event_out += 1
-            log.info("Przekroczenie linii: track #%d -> %s", c.track_id, c.direction)
+            log.info("Line crossing: track #%d -> %s", c.track_id, c.direction)
 
     def _open_event(self, ts: float, kind: str) -> None:
         prof = self.prof
@@ -576,7 +577,7 @@ class Pipeline:
         self._best_persons = -1
         self._event_classes = Counter()
         self.recorder.start(ts)
-        log.info("Zdarzenie #%s otwarte (%s)", self._event_id, kind)
+        log.info("Event #%s opened (%s)", self._event_id, kind)
 
     def _close_event(self, ts: float, reason: str = "quiet") -> None:
         prof = self.prof
@@ -604,7 +605,7 @@ class Pipeline:
             snapshot_path=str(snapshot.relative_to(self.cfg.root)) if snapshot else None,
         )
         log.info(
-            "Zdarzenie #%d zamkniete (%s, %.1fs, osob max %d, %s)",
+            "Event #%d closed (%s, %.1fs, max people %d, %s)",
             event_id, reason, ts - self._event_started, self._event_max_persons,
             clip.name if clip else "bez klipu",
         )
@@ -617,7 +618,7 @@ class Pipeline:
             labels = self.counter.cfg.direction_labels
             self.notifier.send_async(
                 f"{self.prof.name}: {self._event_max_persons} os.",
-                f"Zdarzenie #{event_id}, czas {ts - self._event_started:.0f}s, "
+                f"Event #{event_id}, time {ts - self._event_started:.0f}s, "
                 f"{labels.positive}: {self._event_in}, {labels.negative}: {self._event_out}",
                 "default",
                 "walking",
@@ -625,11 +626,11 @@ class Pipeline:
             )
 
     def _event_kind(self) -> str:
-        """Rodzaj zdarzenia z faktycznie wykrytych klas, nie z zalozenia.
+        """The event kind comes from the classes actually detected, not from an assumption.
 
-        Kamera uliczna liczy pojazdy, korytarzowa ludzi - zapisywanie wszystkiego
-        jako 'person' zafalszowaloby dane u samego zrodla, a warstwa analityczna
-        nie miala by jak tego odkrecic.
+        The street camera counts vehicles and the corridor camera counts people.
+        Recording everything as 'person' would falsify the data at the source, and the
+        analytics layer would have no way to undo it.
         """
         if self._event_max_persons == 0:
             return "audio" if self._event_peak_dbfs is not None else "motion"
@@ -646,7 +647,7 @@ class Pipeline:
     def _on_audio_event(self, ev: AudioEvent) -> None:
         """Callback z watku audio - dolacza szczyt do trwajacego zdarzenia albo tworzy nowe."""
         prof = self.prof
-        log.info("Zdarzenie audio: %.1f dBFS, %.1fs", ev.peak_dbfs, ev.duration_s)
+        log.info("Audio event: %.1f dBFS, %.1fs", ev.peak_dbfs, ev.duration_s)
         if self._event_id is not None:
             self._event_peak_dbfs = max(self._event_peak_dbfs or -120.0, ev.peak_dbfs)
             return
@@ -655,7 +656,7 @@ class Pipeline:
             event_id, ended_at=ev.ended_at, peak_dbfs=ev.peak_dbfs, kind="audio"
         )
         self.notifier.send_async(
-            f"{self.prof.name}: dzwiek",
+            f"{self.prof.name}: audio",
             f"Szczyt {ev.peak_dbfs:.1f} dBFS przez {ev.duration_s:.1f}s",
             "default",
             "loud_sound",
@@ -665,7 +666,7 @@ class Pipeline:
         if event_id:
             self.store.close_event(event_id, cloud_key=key)
 
-    # -- dostep dla web -----------------------------------------------------
+    # -- access for the web layer -------------------------------------------
     def snapshot_state(self) -> LiveState:
         with self._state_lock:
             s = self.state
@@ -677,12 +678,12 @@ class Pipeline:
 
 
 class PipelineManager:
-    """Po jednym Pipeline na kamere, ze WSPOLDZIELONA baza, chmura i ntfy.
+    """One Pipeline per camera, with a SHARED database, cloud and ntfy.
 
-    Wspoldzielenie nie jest optymalizacja, tylko warunkiem poprawnosci: zdarzenia
-    z korytarza i z ulicy musza lezec na jednej osi czasu w jednej bazie, inaczej
-    warstwa analityczna nie zlaczy ich w jeden obraz. Kolejka uploadu tez jest
-    jedna, zeby dwie kamery nie biły sie o lacze.
+    Sharing is not an optimisation but a correctness requirement: events from the
+    corridor and from the street have to sit on one timeline in one database,
+    otherwise the analytics layer cannot join them into a single picture. The
+    upload queue is single too, so that two cameras do not fight over the link.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -701,7 +702,7 @@ class PipelineManager:
 
     def start(self) -> "PipelineManager":
         for slug, pipe in self.pipelines.items():
-            log.info("Uruchamiam kamere '%s' (%s)", pipe.prof.name, pipe.prof.mode)
+            log.info("Starting camera '%s' (%s)", pipe.prof.name, pipe.prof.mode)
             pipe.start()
         return self
 
@@ -724,11 +725,11 @@ class PipelineManager:
 
 
 def prune(cfg: Config) -> tuple[int, int]:
-    """Usuwa media starsze niz retention_days. Zwraca (pliki, zdarzenia).
+    """Removes media older than retention_days. Returns (files, events).
 
-    Retencja jest ustawiana per kamera, wiec kazde zdarzenie oceniamy wedlug
-    progu JEGO kamery - inaczej krotsza retencja ulicy kasowalaby nagrania
-    z korytarza.
+    Retention is set per camera, so every event is judged against the threshold of
+    ITS OWN camera, otherwise the street's shorter retention would delete corridor
+    recordings.
     """
     store = Store(cfg.path(cfg.storage.db))
     now = time.time()
@@ -740,7 +741,7 @@ def prune(cfg: Config) -> tuple[int, int]:
     for ev in events:
         days = by_camera.get(ev.camera, default_days)
         if ev.started_at >= now - days * 86400:
-            continue  # ta kamera trzyma dluzej
+            continue  # this camera holds it longer
         touched += 1
         for rel in (ev.clip_path, ev.snapshot_path):
             if not rel:

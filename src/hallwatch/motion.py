@@ -1,8 +1,8 @@
-"""Detekcja ruchu przez odejmowanie tla (MOG2).
+"""Motion detection by background subtraction (MOG2).
 
-Rola w pipeline: TANI STRAZNIK. Sieć YOLO na kazdej klatce 24/7 to marnowanie
-prądu i CPU, bo korytarz jest pusty wiekszosc czasu. MOG2 kosztuje ~1 ms na
-klatke i decyduje, kiedy warto wybudzic detektor.
+Its role in the pipeline: a CHEAP GUARD. Running YOLO on every frame 24/7 wastes
+power and CPU, because the corridor is empty most of the time. MOG2 costs about
+1 ms per frame and decides when it is worth waking the detector.
 """
 
 from __future__ import annotations

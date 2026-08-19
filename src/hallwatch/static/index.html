@@ -88,20 +88,20 @@
   <div>
     <div class="card">
       <h2 class="hrow">
-        <span>Podgląd live</span>
+        <span>Live preview</span>
         <span class="hrow-right">
           <span id="watchInfo" class="hint"></span>
-          <button id="watchBtn" hidden>Podgląd na żądanie</button>
+          <button id="watchBtn" hidden>On-demand preview</button>
         </span>
       </h2>
-      <img id="live" src="/stream.mjpg" alt="podgląd na żywo">
+      <img id="live" src="/stream.mjpg" alt="live preview">
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Licznik</h2>
+      <h2>Counter</h2>
       <div class="grid" id="stats"></div>
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Aktywność (ostatnie 3 h)</h2>
+      <h2>Activity (last 3 h)</h2>
       <canvas id="chart" width="900" height="90"></canvas>
     </div>
   </div>
@@ -110,25 +110,25 @@
     <div class="card">
       <h2>System</h2>
       <div id="sys"></div>
-      <div class="meter" title="poziom dźwięku"><i id="audioBar" style="width:0"></i></div>
+      <div class="meter" title="audio level"><i id="audioBar" style="width:0"></i></div>
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Zdarzenia</h2>
-      <div class="events" id="events"><div class="empty">Czekam na pierwsze zdarzenie…</div></div>
+      <h2>Events</h2>
+      <div class="events" id="events"><div class="empty">Waiting for the first event…</div></div>
     </div>
   </div>
 </main>
 
 <dialog id="player">
   <video id="video" controls preload="metadata"></video>
-  <div class="bar"><span id="playerInfo"></span><button onclick="player.close()">Zamknij</button></div>
+  <div class="bar"><span id="playerInfo"></span><button onclick="player.close()">Close</button></div>
 </dialog>
 
 <script>
 const $ = id => document.getElementById(id);
-// --- przelacznik kamer -----------------------------------------------------
-// Kazdy endpoint przyjmuje ?camera=<slug>; trzymamy aktualny wybor w jednym
-// miejscu i doklejamy go do wszystkich zapytan oraz do strumienia MJPEG.
+// --- camera switch ---------------------------------------------------------
+// Every endpoint accepts ?camera=<slug>; we keep the current choice in one
+// place and append it to every request and to the MJPEG stream.
 let CAM = new URLSearchParams(location.search).get('camera');
 let CAMERAS = [];
 const q = (path, extra='') => path + (CAM ? (path.includes('?') ? '&' : '?') + 'camera=' + CAM : '') + extra;
@@ -139,7 +139,7 @@ async function loadCameras(){
     if(!CAM && CAMERAS.length) CAM = CAMERAS[0].slug;
     $('camTabs').innerHTML = CAMERAS.map(c => {
       const sub = c.mode === 'sampling'
-        ? `próbkowanie ${(c.sampling.duty_cycle*100).toFixed(1)}%`
+        ? `sampling ${(c.sampling.duty_cycle*100).toFixed(1)}%`
         : c.mode;
       return `<div class="tab ${c.slug===CAM?'active':''}" data-slug="${c.slug}">
                 ${c.name}<small>${sub}</small></div>`;
@@ -154,12 +154,12 @@ function switchCamera(slug){
   setWatching(false);
   document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.slug===slug));
   $('live').src = q('/stream.mjpg') + '&t=' + Date.now();
-  $('events').innerHTML = '<div class="empty">Wczytuję…</div>';
+  $('events').innerHTML = '<div class="empty">Loading…</div>';
   tickState(); tickEvents();
 }
-const fmtTime = ts => new Date(ts*1000).toLocaleString('pl-PL',{hour12:false});
+const fmtTime = ts => new Date(ts*1000).toLocaleString('en-GB',{hour12:false});
 const fmtDur = s => s == null ? '—' : (s < 60 ? s.toFixed(0)+' s' : Math.floor(s/60)+' min '+Math.round(s%60)+' s');
-const KIND_PL = {person:'osoba', motion:'ruch', audio:'dźwięk'};
+const KIND_LABEL = {person:'person', motion:'motion', audio:'audio'};
 
 function pill(text, cls=''){ return `<div class="pill ${cls}">${text}</div>`; }
 
@@ -168,45 +168,45 @@ async function tickState(){
     const s = await (await fetch(q('/api/state'))).json();
     let p = '';
     p += pill(`${s.fps.toFixed(1)} FPS`, s.fps > 1 ? 'on' : 'warn');
-    p += pill(s.awake ? 'YOLO aktywny' : 'czuwanie', s.awake ? 'on' : '');
+    p += pill(s.awake ? 'YOLO active' : 'idle', s.awake ? 'on' : '');
     if (s.recording) p += pill('● REC', 'rec');
-    if (s.motion) p += pill('ruch', 'warn');
+    if (s.motion) p += pill('motion', 'warn');
     if (s.audio_enabled) p += pill(`audio ${s.audio_dbfs.toFixed(0)} dBFS`, s.audio_loud ? 'rec' : '');
-    if (s.privacy_masks) p += pill(`${s.privacy_masks} maski prywatności`, 'on');
-    if (s.classes && !s.classes.includes(0)) p += pill('pojazdy', 'on');
-    if (s.recording_enabled === false) p += pill('bez nagrywania', '');
+    if (s.privacy_masks) p += pill(`${s.privacy_masks} privacy masks`, 'on');
+    if (s.classes && !s.classes.includes(0)) p += pill('vehicles', 'on');
+    if (s.recording_enabled === false) p += pill('no recording', '');
     if (s.mode === 'sampling')
-      p += pill(s.sampling_window ? '● okno próbkowania' : 'czeka na okno', s.sampling_window ? 'rec' : '');
+      p += pill(s.sampling_window ? '● sampling window' : 'waiting for window', s.sampling_window ? 'rec' : '');
     if (s.mode === 'on_demand')
-      p += pill(s.session_active ? `sesja #${s.sessions}` : 'kamera śpi', s.session_active ? 'on' : '');
-    if (s.last_error) p += pill('błąd: ' + s.last_error, 'rec');
+      p += pill(s.session_active ? `session #${s.sessions}` : 'camera asleep', s.session_active ? 'on' : '');
+    if (s.last_error) p += pill('error: ' + s.last_error, 'rec');
     $('pills').innerHTML = p;
 
     $('watchBtn').hidden = s.mode !== 'on_demand';
     if (s.mode === 'on_demand' && !watching)
-      $('watchInfo').textContent = s.session_active ? 'sesja aktywna' : 'kamera śpi';
+      $('watchInfo').textContent = s.session_active ? 'session active' : 'camera asleep';
 
     const zones = Object.entries(s.zones || {});
     $('stats').innerHTML = [
-      ['osób teraz', s.persons],
-      [s.count_in != null ? 'wejścia' : 'in', s.count_in],
-      ['wyjścia', s.count_out],
-      ['unikalnych osób', s.unique_seen],
+      ['people now', s.persons],
+      [s.count_in != null ? 'entries' : 'in', s.count_in],
+      ['exits', s.count_out],
+      ['unique people', s.unique_seen],
       ...zones.map(([n,v]) => [n.replace(/-/g,' '), v]),
     ].map(([k,v]) => `<div class="stat"><b>${v}</b><small>${k}</small></div>`).join('');
 
     const h = Math.floor(s.uptime_s/3600), m = Math.floor(s.uptime_s%3600/60);
     $('sys').innerHTML = [
-      ['źródło', s.source.length > 34 ? s.source.slice(0,34)+'…' : s.source],
-      ['urządzenie', s.device],
-      ['czas detekcji', s.detect_ms.toFixed(1)+' ms'],
-      ['klatek łącznie', s.frames_total.toLocaleString('pl-PL')],
-      ['tryb', s.mode === 'on_demand' ? 'on_demand (bateria)'
-              : s.mode === 'sampling' ? `sampling (${(s.duty_cycle*100||0).toFixed(1)}% czasu)` : 'continuous'],
-      ['sesje', s.mode === 'on_demand' ? s.sessions : '—'],
-      ['reconnecty', s.reconnects],
-      ['chmura', s.cloud_status],
-      ['retencja', s.retention_days + ' dni'],
+      ['source', s.source.length > 34 ? s.source.slice(0,34)+'…' : s.source],
+      ['device', s.device],
+      ['detection time', s.detect_ms.toFixed(1)+' ms'],
+      ['frames total', s.frames_total.toLocaleString('en-GB')],
+      ['tryb', s.mode === 'on_demand' ? 'on_demand (battery)'
+              : s.mode === 'sampling' ? `sampling (${(s.duty_cycle*100||0).toFixed(1)}% of time)` : 'continuous'],
+      ['sessions', s.mode === 'on_demand' ? s.sessions : '—'],
+      ['reconnects', s.reconnects],
+      ['cloud', s.cloud_status],
+      ['retention', s.retention_days + ' days'],
       ['uptime', `${h} h ${m} min`],
     ].map(([k,v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
 
@@ -214,7 +214,7 @@ async function tickState(){
     const lvl = Math.max(0, Math.min(100, (s.audio_dbfs + 60) / 60 * 100));
     $('audioBar').style.width = lvl + '%';
     $('audioBar').style.background = s.audio_loud ? 'var(--danger)' : 'var(--blue)';
-  }catch(e){ /* serwer chwilowo niedostepny - probujemy dalej */ }
+  }catch(e){ /* server briefly unavailable, keep trying */ }
 }
 
 async function tickEvents(){
@@ -226,17 +226,17 @@ async function tickEvents(){
         ? `<img src="${e.snapshot}" alt="">`
         : `<div class="no-thumb">${e.kind === 'audio' ? '🔊' : '·'}</div>`;
       const bits = [];
-      if(e.max_persons) bits.push(`${e.max_persons} os.`);
+      if(e.max_persons) bits.push(`${e.max_persons} ppl`);
       if(e.count_in) bits.push(`↓${e.count_in}`);
       if(e.count_out) bits.push(`↑${e.count_out}`);
       if(e.peak_dbfs != null) bits.push(`${e.peak_dbfs.toFixed(0)} dBFS`);
       bits.push(fmtDur(e.duration_s));
-      if(e.sampled) bits.push(`próbka ×${e.sample_weight.toFixed(0)}`);
+      if(e.sampled) bits.push(`sample x${e.sample_weight.toFixed(0)}`);
       if(e.cloud) bits.push('☁︎');
       return `<div class="ev" data-clip="${e.clip||''}" data-id="${e.id}" data-time="${fmtTime(e.started_at)}">
         ${thumb}
         <div class="ev-meta">
-          <div class="ev-time"><span class="tag ${e.kind}">${KIND_PL[e.kind]||e.kind}</span>${fmtTime(e.started_at)}</div>
+          <div class="ev-time"><span class="tag ${e.kind}">${KIND_LABEL[e.kind]||e.kind}</span>${fmtTime(e.started_at)}</div>
           <div class="ev-sub">${bits.join(' · ')}</div>
         </div></div>`;
     }).join('');
@@ -245,7 +245,7 @@ async function tickEvents(){
       const clip = el.dataset.clip;
       if(!clip){ return; }
       $('video').src = clip;
-      $('playerInfo').textContent = `Zdarzenie #${el.dataset.id} · ${el.dataset.time}`;
+      $('playerInfo').textContent = `Event #${el.dataset.id} · ${el.dataset.time}`;
       $('player').showModal();
     });
   }catch(e){}
@@ -272,14 +272,14 @@ async function tickChart(){
       ctx.fillRect(i*bw, h - bh, Math.max(1, bw - 1), bh);
     });
     ctx.fillStyle = '#8b98a8'; ctx.font = '10px sans-serif';
-    ctx.fillText('szczyt: ' + max + ' os./min', 4, 11);
+    ctx.fillText('peak: ' + max + ' ppl/min', 4, 11);
   }catch(e){}
 }
 
-// --- Podgląd na żądanie (tryb on_demand, kamera na baterii) -----------------
-// Kamera bateryjna zasypia po ciszy w kadrze. Dopóki ten przycisk jest
-// włączony i karta jest widoczna, wysyłamy puls "patrzę", który trzyma sesję
-// otwartą. Ukrycie karty albo wyłączenie przycisku pozwala kamerze zasnąć.
+// --- On-demand preview (on_demand mode, battery camera) --------------------
+// A battery camera falls asleep once the frame goes quiet. For as long as this
+// button is on and the tab is visible we send an "I am watching" heartbeat that
+// holds the session open. Hiding the tab or turning the button off lets it sleep.
 let watching = false, watchTimer = null;
 
 async function pingWatch(){
@@ -287,7 +287,7 @@ async function pingWatch(){
   try{
     const r = await (await fetch(q('/api/watch'), {method:'POST'})).json();
     $('watchInfo').textContent = r.holding
-      ? `budżet: ${Math.round(r.budget_left_s)} s`
+      ? `budget: ${Math.round(r.budget_left_s)} s`
       : (r.detail || '');
   }catch(e){}
 }
@@ -296,14 +296,14 @@ function setWatching(on){
   watching = on;
   const b = $('watchBtn');
   b.classList.toggle('on', on);
-  b.textContent = on ? '● Podglądam — kliknij, by uśpić' : 'Podgląd na żądanie';
+  b.textContent = on ? '● Watching, click to sleep' : 'On-demand preview';
   clearInterval(watchTimer);
   if(on){ pingWatch(); watchTimer = setInterval(pingWatch, 10000); }
-  else { $('watchInfo').textContent = 'kamera może zasnąć'; }
+  else { $('watchInfo').textContent = 'camera may sleep'; }
 }
 
 $('watchBtn').onclick = () => setWatching(!watching);
-// karta schowana = nie budzimy kamery na darmo
+// hidden tab = do not wake the camera for nothing
 document.addEventListener('visibilitychange', () => { if(!document.hidden) pingWatch(); });
 
 loadCameras().then(() => {
