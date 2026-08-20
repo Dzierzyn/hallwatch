@@ -18,6 +18,8 @@ jobs:
 
   unit-tests:
     strategy:
+      # a red run should show results from EVERY OS, not a wall of "Cancelled"
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.10", "3.12"]
