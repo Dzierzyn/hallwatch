@@ -28,9 +28,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install (CPU-only, no YOLO weights needed for unit tests)
-        run: |
-          uv venv
-          uv pip install -e . pytest
+        # setup-uv already created and activated .venv for the chosen Python
+        run: uv pip install -e . pytest
       - name: Unit tests
         run: uv run pytest tests -m "not integration" -q
 
@@ -50,8 +49,6 @@ jobs:
           path: "*.pt"
           key: yolo11n-v1
       - name: Install
-        run: |
-          uv venv
-          uv pip install -e . pytest
+        run: uv pip install -e . pytest
       - name: Integration tests
         run: uv run pytest tests -m integration -q
